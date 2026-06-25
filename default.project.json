@@ -1,0 +1,42 @@
+{
+  "name": "tiny-giant-obby-mvp",
+  "tree": {
+    "$className": "DataModel",
+    "ReplicatedStorage": {
+      "$className": "ReplicatedStorage",
+      "TinyGiantObby": {
+        "$path": "src/ReplicatedStorage/TinyGiantObby"
+      }
+    },
+    "ServerScriptService": {
+      "$className": "ServerScriptService",
+      "TinyGiantObby": {
+        "$path": "src/ServerScriptService/TinyGiantObby"
+      },
+      "WipeoutConveyorController": {
+        "$path": "src/ServerScriptService/WipeoutConveyorController.server.lua"
+      },
+      "WipeoutSweeperController": {
+        "$path": "src/ServerScriptService/WipeoutSweeperController.server.lua"
+      },
+      "WipeoutTilterController": {
+        "$path": "src/ServerScriptService/WipeoutTilterController.server.lua"
+      },
+      "WipeoutSwingBallController": {
+        "$path": "src/ServerScriptService/WipeoutSwingBallController.server.lua"
+      },
+      "WipeoutLobbyController": {
+        "$path": "src/ServerScriptService/WipeoutLobbyController.server.lua"
+      }
+    },
+    "StarterPlayer": {
+      "$className": "StarterPlayer",
+      "StarterPlayerScripts": {
+        "$className": "StarterPlayerScripts",
+        "TinyGiantObby": {
+          "$path": "src/StarterPlayer/StarterPlayerScripts/TinyGiantObby"
+        }
+      }
+    }
+  }
+}
