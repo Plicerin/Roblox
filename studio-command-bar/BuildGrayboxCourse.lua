@@ -155,6 +155,24 @@ local function coin(name, position, value)
 	p:SetAttribute("CoinValue", value or 1)
 	CollectionService:AddTag(p, "TG_Coin")
 
+	local marker = Instance.new("Part")
+	marker.Name = "SpinMarker"
+	marker.Size = Vector3.new(0.16, 1.65, 0.12)
+	marker.CFrame = p.CFrame * CFrame.new(0.58, 0, -0.38)
+	marker.Anchored = false
+	marker.CanCollide = false
+	marker.CanTouch = false
+	marker.CanQuery = false
+	marker.Color = Color3.fromRGB(80, 62, 18)
+	marker.Material = Enum.Material.Metal
+	marker.Parent = p
+
+	local weld = Instance.new("WeldConstraint")
+	weld.Name = "SpinMarkerWeld"
+	weld.Part0 = p
+	weld.Part1 = marker
+	weld.Parent = marker
+
 	local light = Instance.new("PointLight")
 	light.Color = COLORS.Coin
 	light.Brightness = 0.12
@@ -489,7 +507,7 @@ checkpoint(8, 626)
 pit("SwingBalls_ResetPit", 686, 116)
 block("SwingBalls_LeftWall", Vector3.new(2.5, 8, 122), Vector3.new(-24.25, 3.5, 686), COLORS.Wall)
 block("SwingBalls_RightWall", Vector3.new(2.5, 8, 122), Vector3.new(24.25, 3.5, 686), COLORS.Wall)
-block("SwingBalls_Bridge", Vector3.new(30, 1.2, 116), Vector3.new(0, 1.05, 686), COLORS.Pad)
+block("SwingBalls_Bridge", Vector3.new(30, 1.2, 108), Vector3.new(0, 1.05, 690), COLORS.Pad)
 local swingTube = part("SwingBalls_OverheadTube", Vector3.new(2.6, 116, 2.6), CFrame.new(0, 25, 686) * CFrame.Angles(math.rad(90), 0, 0), COLORS.Support, Enum.Material.Metal)
 swingTube.Shape = Enum.PartType.Cylinder
 swingTube.CanCollide = false

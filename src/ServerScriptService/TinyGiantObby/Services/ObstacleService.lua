@@ -36,7 +36,6 @@ local slideSteerByPlayer = {}
 local slideSteerUpdatedByPlayer = {}
 local hazardScanAccumulator = 0
 local slideScanAccumulator = 0
-local COIN_SPIN_RADIANS_PER_SECOND = math.rad(160)
 
 local SLIDE_START_Z = -22
 local SLIDE_END_Z = 350
@@ -855,14 +854,6 @@ function ObstacleService.start()
 				local period = math.max(state.Period, 0.4)
 				local wave = (math.sin((now + state.Phase) * math.pi * 2 / period) + 1) * 0.5
 				part.CFrame = state.Origin + (state.Travel * wave)
-			end
-		end
-
-		for part in pairs(coinParts) do
-			if not part.Parent then
-				coinParts[part] = nil
-			elseif part:GetAttribute("Collected") ~= true then
-				part.CFrame *= CFrame.Angles(0, COIN_SPIN_RADIANS_PER_SECOND * deltaTime, 0)
 			end
 		end
 

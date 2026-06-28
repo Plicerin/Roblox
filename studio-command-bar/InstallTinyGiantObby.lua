@@ -16,6 +16,7 @@ clearChild(game:GetService("ServerScriptService"), "WipeoutSweeperController")
 clearChild(game:GetService("ServerScriptService"), "WipeoutTilterController")
 clearChild(game:GetService("ServerScriptService"), "WipeoutSwingBallController")
 clearChild(game:GetService("ServerScriptService"), "WipeoutLobbyController")
+clearChild(game:GetService("ServerScriptService"), "WipeoutCoinAnimator")
 clearChild(game:GetService("StarterPlayer"):WaitForChild("StarterPlayerScripts"), "TinyGiantObby")
 
 local function ensureFolder(parent, name)
@@ -494,7 +495,6 @@ local slideSteerByPlayer = {}
 local slideSteerUpdatedByPlayer = {}
 local hazardScanAccumulator = 0
 local slideScanAccumulator = 0
-local COIN_SPIN_RADIANS_PER_SECOND = math.rad(160)
 
 local SLIDE_START_Z = -22
 local SLIDE_END_Z = 350
@@ -1316,14 +1316,6 @@ function ObstacleService.start()
 			end
 		end
 
-		for part in pairs(coinParts) do
-			if not part.Parent then
-				coinParts[part] = nil
-			elseif part:GetAttribute("Collected") ~= true then
-				part.CFrame *= CFrame.Angles(0, COIN_SPIN_RADIANS_PER_SECOND * deltaTime, 0)
-			end
-		end
-
 		slideScanAccumulator += deltaTime
 		if slideScanAccumulator >= 0.05 then
 			slideScanAccumulator = 0
@@ -2083,6 +2075,69 @@ Players.PlayerRemoving:Connect(function(player)
 end)
 
 ]================] },
+	{ service = "ServerScriptService", folders = {}, className = "Script", name = "WipeoutCoinAnimator", source = [================[
+local CollectionService = game:GetService("CollectionService")
+local RunService = game:GetService("RunService")
+
+local COIN_TAG = "TG_Coin"
+local SPIN_RADIANS_PER_SECOND = math.rad(360)
+local ROLL_RADIANS_PER_SECOND = math.rad(252)
+local BOB_HEIGHT = 0.28
+local BOB_RADIANS_PER_SECOND = math.rad(150)
+local RESCAN_SECONDS = 0.35
+
+local coinStates = {}
+local rescanElapsed = 0
+local animationTime = 0
+
+local function trackCoin(part)
+	if not part:IsA("BasePart") then
+		return
+	end
+
+	coinStates[part] = {
+		BaseCFrame = part.CFrame,
+		Phase = math.random() * math.pi * 2,
+	}
+end
+
+local function rescanCoins()
+	for _, part in ipairs(CollectionService:GetTagged(COIN_TAG)) do
+		if coinStates[part] == nil then
+			trackCoin(part)
+		end
+	end
+end
+
+CollectionService:GetInstanceAddedSignal(COIN_TAG):Connect(trackCoin)
+CollectionService:GetInstanceRemovedSignal(COIN_TAG):Connect(function(part)
+	coinStates[part] = nil
+end)
+
+rescanCoins()
+
+RunService.Heartbeat:Connect(function(deltaTime)
+	rescanElapsed += deltaTime
+	animationTime += deltaTime
+	if rescanElapsed >= RESCAN_SECONDS then
+		rescanElapsed = 0
+		rescanCoins()
+	end
+
+	local now = animationTime
+	for part, state in pairs(coinStates) do
+		if not part.Parent or part:GetAttribute("Collected") == true then
+			coinStates[part] = nil
+		else
+			local bob = math.sin(now * BOB_RADIANS_PER_SECOND + state.Phase) * BOB_HEIGHT
+			part.CFrame = state.BaseCFrame
+				* CFrame.new(0, bob, 0)
+				* CFrame.Angles(0, now * SPIN_RADIANS_PER_SECOND + state.Phase, now * ROLL_RADIANS_PER_SECOND)
+		end
+	end
+end)
+
+]================] },
 	{ service = "StarterPlayer", folders = {"StarterPlayerScripts", "TinyGiantObby"}, className = "LocalScript", name = "SizeClient", source = [================[
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -2667,6 +2722,24 @@ local function coin(name, position, value)
 	p:SetAttribute("CoinValue", value or 1)
 	CollectionService:AddTag(p, "TG_Coin")
 
+	local marker = Instance.new("Part")
+	marker.Name = "SpinMarker"
+	marker.Size = Vector3.new(0.16, 1.65, 0.12)
+	marker.CFrame = p.CFrame * CFrame.new(0.58, 0, -0.38)
+	marker.Anchored = false
+	marker.CanCollide = false
+	marker.CanTouch = false
+	marker.CanQuery = false
+	marker.Color = Color3.fromRGB(80, 62, 18)
+	marker.Material = Enum.Material.Metal
+	marker.Parent = p
+
+	local weld = Instance.new("WeldConstraint")
+	weld.Name = "SpinMarkerWeld"
+	weld.Part0 = p
+	weld.Part1 = marker
+	weld.Parent = marker
+
 	local light = Instance.new("PointLight")
 	light.Color = COLORS.Coin
 	light.Brightness = 0.12
@@ -3001,7 +3074,7 @@ checkpoint(8, 626)
 pit("SwingBalls_ResetPit", 686, 116)
 block("SwingBalls_LeftWall", Vector3.new(2.5, 8, 122), Vector3.new(-24.25, 3.5, 686), COLORS.Wall)
 block("SwingBalls_RightWall", Vector3.new(2.5, 8, 122), Vector3.new(24.25, 3.5, 686), COLORS.Wall)
-block("SwingBalls_Bridge", Vector3.new(30, 1.2, 116), Vector3.new(0, 1.05, 686), COLORS.Pad)
+block("SwingBalls_Bridge", Vector3.new(30, 1.2, 108), Vector3.new(0, 1.05, 690), COLORS.Pad)
 local swingTube = part("SwingBalls_OverheadTube", Vector3.new(2.6, 116, 2.6), CFrame.new(0, 25, 686) * CFrame.Angles(math.rad(90), 0, 0), COLORS.Support, Enum.Material.Metal)
 swingTube.Shape = Enum.PartType.Cylinder
 swingTube.CanCollide = false
