@@ -1,4 +1,4 @@
-﻿-- Wipeout Run one-paste Studio installer
+-- Wipeout Run one-paste Studio installer
 -- Paste this whole file into Roblox Studio Command Bar and press Enter.
 
 local function clearChild(parent, name)
@@ -16,7 +16,9 @@ clearChild(game:GetService("ServerScriptService"), "WipeoutSweeperController")
 clearChild(game:GetService("ServerScriptService"), "WipeoutTilterController")
 clearChild(game:GetService("ServerScriptService"), "WipeoutSwingBallController")
 clearChild(game:GetService("ServerScriptService"), "WipeoutLobbyController")
+clearChild(game:GetService("ServerScriptService"), "WipeoutLobbyFeatures")
 clearChild(game:GetService("ServerScriptService"), "WipeoutCoinAnimator")
+clearChild(game:GetService("ServerScriptService"), "WipeoutQARunner")
 clearChild(game:GetService("StarterPlayer"):WaitForChild("StarterPlayerScripts"), "TinyGiantObby")
 
 local function ensureFolder(parent, name)
@@ -126,7 +128,11 @@ local checkpointParts = {}
 local finishParts = {}
 local scanAccumulator = 0
 local COURSE_FORWARD = Vector3.new(0, 0, 1)
-local TIMER_START_PART_NAME = "StepPad_1"
+local TIMER_START_PART_NAMES = {
+	"StepPad_1",
+	"FactoryStartPad",
+	"ComputerStartPad",
+}
 
 local function getPlayerFromHit(hit)
 	local character = hit and hit:FindFirstAncestorOfClass("Model")
@@ -163,6 +169,25 @@ local function beginRun(player)
 	player:SetAttribute("RunStartTime", nil)
 	player:SetAttribute("RunElapsedSeconds", nil)
 	player:SetAttribute("RunTimeSeconds", nil)
+end
+
+local function getCourseNameForPart(part)
+	return part:GetAttribute("CourseName") or "WipeoutRun"
+end
+
+local function getBestTimeAttribute(courseName)
+	if courseName == "FactoryChaos" then
+		return "BestFactoryTimeSeconds"
+	elseif courseName == "ComputerObby" then
+		return "BestComputerTimeSeconds"
+	end
+	return "BestRunTimeSeconds"
+end
+
+local function courseMatchesPlayer(player, part)
+	local courseName = getCourseNameForPart(part)
+	local playerCourse = player:GetAttribute("CourseName")
+	return playerCourse == nil or playerCourse == "" or playerCourse == courseName
 end
 
 local function startRunTimer(player)
@@ -206,13 +231,14 @@ end
 
 local function processCheckpoint(player, part)
 	local state = getRunState(player)
-	if part.Name == "Checkpoint_1" and (state.completed or player:GetAttribute("InLobby") == true or player:GetAttribute("CurrentCheckpoint") == "") then
+	if part:GetAttribute("CourseStart") == true or (part.Name == "Checkpoint_1" and (state.completed or player:GetAttribute("InLobby") == true or player:GetAttribute("CurrentCheckpoint") == "")) then
 		beginRun(player)
 		state = runStateByPlayer[player]
 	end
 
 	checkpointByPlayer[player] = part
 	player:SetAttribute("CurrentCheckpoint", part.Name)
+	player:SetAttribute("CourseName", getCourseNameForPart(part))
 	player:SetAttribute("InLobby", false)
 
 	local key = part:GetFullName()
@@ -224,7 +250,7 @@ local function processCheckpoint(player, part)
 	end
 end
 
-local function processFinish(player)
+local function processFinish(player, part)
 	local state = getRunState(player)
 	if state.completed then
 		return
@@ -238,13 +264,20 @@ local function processFinish(player)
 	player:SetAttribute("CourseFinished", true)
 	player:SetAttribute("RunElapsedSeconds", elapsed)
 	player:SetAttribute("RunTimeSeconds", elapsed)
-	local best = player:GetAttribute("BestRunTimeSeconds")
+	local courseName = part and getCourseNameForPart(part) or player:GetAttribute("CourseName")
+	player:SetAttribute("CourseName", courseName or "WipeoutRun")
+	local bestAttribute = getBestTimeAttribute(courseName)
+	local best = player:GetAttribute(bestAttribute)
 	if typeof(best) ~= "number" or best <= 0 or elapsed < best then
-		player:SetAttribute("BestRunTimeSeconds", elapsed)
+		player:SetAttribute(bestAttribute, elapsed)
 	end
 	CurrencyService.addWins(player, ObstacleConfig.FinishWins)
 	CurrencyService.addCoins(player, ObstacleConfig.FinishCoins)
-	FeedbackService.pulsePart(workspace:FindFirstChild("FinishGate", true), Color3.fromRGB(255, 215, 0))
+	local finishGate = part or workspace:FindFirstChild("FinishGate", true)
+	FeedbackService.pulsePart(finishGate, Color3.fromRGB(255, 215, 0))
+	if finishGate then
+		FeedbackService.confettiAt(finishGate.Position + Vector3.new(0, 4, 0))
+	end
 	if player.Character then
 		FeedbackService.characterPulse(player.Character, Color3.fromRGB(255, 215, 0))
 	end
@@ -272,8 +305,18 @@ local function connectFinish(part)
 			return
 		end
 
-		processFinish(player)
+		if courseMatchesPlayer(player, part) then
+			processFinish(player, part)
+		end
 	end)
+end
+
+local function isTimerStartForPlayer(player, character, part)
+	return part
+		and part:IsA("BasePart")
+		and (part:GetAttribute("StartsRun") == true or part.Name == "StepPad_1")
+		and courseMatchesPlayer(player, part)
+		and isCharacterNearPart(character, part)
 end
 
 function CheckpointService.start()
@@ -306,13 +349,15 @@ function CheckpointService.start()
 						processCheckpoint(player, part)
 					end
 				end
-				local timerStartPart = workspace:FindFirstChild(TIMER_START_PART_NAME, true)
-				if timerStartPart and isCharacterNearPart(character, timerStartPart) then
-					startRunTimer(player)
+				for _, timerStartPartName in ipairs(TIMER_START_PART_NAMES) do
+					local timerStartPart = workspace:FindFirstChild(timerStartPartName, true)
+					if isTimerStartForPlayer(player, character, timerStartPart) then
+						startRunTimer(player)
+					end
 				end
 				for part in pairs(finishParts) do
-					if isCharacterNearPart(character, part) then
-						processFinish(player)
+					if courseMatchesPlayer(player, part) and isCharacterNearPart(character, part) then
+						processFinish(player, part)
 					end
 				end
 			end
@@ -340,9 +385,65 @@ return CheckpointService
 
 ]================] },
 	{ service = "ServerScriptService", folders = {"TinyGiantObby", "Services"}, className = "ModuleScript", name = "CurrencyService", source = [================[
+local DataStoreService = game:GetService("DataStoreService")
 local Players = game:GetService("Players")
 
 local CurrencyService = {}
+
+local DATASTORE_NAME = "WipeoutRunPlayerData_v1"
+local SAVE_INTERVAL = 60
+
+local storeOk, playerStore = pcall(function()
+	return DataStoreService:GetDataStore(DATASTORE_NAME)
+end)
+if not storeOk then
+	playerStore = nil
+end
+local profiles = {}
+local saving = {}
+
+local function defaultProfile()
+	return {
+		Coins = 0,
+		Wins = 0,
+		LastDailyGiftDay = "",
+		Purchases = {},
+		EquippedCosmetic = "",
+	}
+end
+
+local function dataKey(player)
+	return "player_" .. tostring(player.UserId)
+end
+
+local function cleanNumber(value)
+	if typeof(value) ~= "number" then
+		return 0
+	end
+	return math.max(0, math.floor(value))
+end
+
+local function sanitizeProfile(data)
+	local profile = defaultProfile()
+	if typeof(data) ~= "table" then
+		return profile
+	end
+
+	profile.Coins = cleanNumber(data.Coins)
+	profile.Wins = cleanNumber(data.Wins)
+	profile.LastDailyGiftDay = if typeof(data.LastDailyGiftDay) == "string" then data.LastDailyGiftDay else ""
+	profile.EquippedCosmetic = if typeof(data.EquippedCosmetic) == "string" then data.EquippedCosmetic else ""
+
+	if typeof(data.Purchases) == "table" then
+		for key, value in pairs(data.Purchases) do
+			if typeof(key) == "string" and value == true then
+				profile.Purchases[key] = true
+			end
+		end
+	end
+
+	return profile
+end
 
 local function createStat(parent, name, value)
 	local stat = Instance.new("IntValue")
@@ -352,30 +453,265 @@ local function createStat(parent, name, value)
 	return stat
 end
 
-function CurrencyService.addCoins(player, amount)
+local function getStats(player)
 	local leaderstats = player:FindFirstChild("leaderstats")
-	local coins = leaderstats and leaderstats:FindFirstChild("Size Coins")
-	if coins then
-		coins.Value += amount
+	return leaderstats,
+		leaderstats and leaderstats:FindFirstChild("Size Coins"),
+		leaderstats and leaderstats:FindFirstChild("Wins")
+end
+
+local function purchaseAttributeName(name)
+	return "Purchased_" .. name:gsub("%W", "")
+end
+
+local function applyProfile(player, profile)
+	local leaderstats, coins, wins = getStats(player)
+	if not leaderstats then
+		leaderstats = Instance.new("Folder")
+		leaderstats.Name = "leaderstats"
+		leaderstats.Parent = player
 	end
+	if not wins then
+		wins = createStat(leaderstats, "Wins", profile.Wins)
+	end
+	if not coins then
+		coins = createStat(leaderstats, "Size Coins", profile.Coins)
+	end
+
+	coins.Value = profile.Coins
+	wins.Value = profile.Wins
+	player:SetAttribute("DailyGiftClaimed", profile.LastDailyGiftDay == os.date("!%Y-%j"))
+	player:SetAttribute("EquippedCosmetic", profile.EquippedCosmetic)
+
+	for name, owned in pairs(profile.Purchases) do
+		if owned == true then
+			player:SetAttribute(purchaseAttributeName(name), true)
+		end
+	end
+end
+
+local function syncStatsToProfile(player)
+	local profile = profiles[player]
+	if not profile then
+		return
+	end
+
+	local _, coins, wins = getStats(player)
+	if coins then
+		profile.Coins = cleanNumber(coins.Value)
+	end
+	if wins then
+		profile.Wins = cleanNumber(wins.Value)
+	end
+	profile.EquippedCosmetic = player:GetAttribute("EquippedCosmetic") or profile.EquippedCosmetic or ""
+end
+
+local function markDirty(player)
+	local profile = profiles[player]
+	if profile then
+		profile.Dirty = true
+	end
+end
+
+local function loadProfile(player)
+	if not playerStore then
+		player:SetAttribute("DataStoreStatus", "SessionOnly")
+		return defaultProfile()
+	end
+
+	local ok, data = pcall(function()
+		return playerStore:GetAsync(dataKey(player))
+	end)
+
+	if ok then
+		player:SetAttribute("DataStoreStatus", "Loaded")
+		return sanitizeProfile(data)
+	end
+
+	player:SetAttribute("DataStoreStatus", "SessionOnly")
+	return defaultProfile()
+end
+
+function CurrencyService.savePlayer(player)
+	local profile = profiles[player]
+	if not profile or saving[player] then
+		return false
+	end
+	if not playerStore then
+		player:SetAttribute("DataStoreStatus", "SessionOnly")
+		return false
+	end
+
+	syncStatsToProfile(player)
+	saving[player] = true
+
+	local payload = {
+		Coins = profile.Coins,
+		Wins = profile.Wins,
+		LastDailyGiftDay = profile.LastDailyGiftDay,
+		Purchases = profile.Purchases,
+		EquippedCosmetic = profile.EquippedCosmetic,
+	}
+
+	local ok = pcall(function()
+		playerStore:SetAsync(dataKey(player), payload)
+	end)
+
+	saving[player] = nil
+	if ok then
+		profile.Dirty = false
+		player:SetAttribute("DataStoreStatus", "Saved")
+	else
+		player:SetAttribute("DataStoreStatus", "SessionOnly")
+	end
+	return ok
+end
+
+function CurrencyService.addCoins(player, amount)
+	local _, coins = getStats(player)
+	if coins then
+		coins.Value = math.max(0, coins.Value + math.floor(amount))
+		markDirty(player)
+	end
+end
+
+function CurrencyService.spendCoins(player, amount)
+	local _, coins = getStats(player)
+	amount = math.max(0, math.floor(amount))
+	if not coins or coins.Value < amount then
+		return false
+	end
+
+	coins.Value -= amount
+	markDirty(player)
+	return true
 end
 
 function CurrencyService.addWins(player, amount)
-	local leaderstats = player:FindFirstChild("leaderstats")
-	local wins = leaderstats and leaderstats:FindFirstChild("Wins")
+	local _, _, wins = getStats(player)
 	if wins then
-		wins.Value += amount
+		wins.Value = math.max(0, wins.Value + math.floor(amount))
+		markDirty(player)
 	end
 end
 
-function CurrencyService.start()
-	Players.PlayerAdded:Connect(function(player)
-		local leaderstats = Instance.new("Folder")
-		leaderstats.Name = "leaderstats"
-		leaderstats.Parent = player
+function CurrencyService.claimDailyGift(player, rewardCoins)
+	local profile = profiles[player]
+	if not profile then
+		return false, "Data loading"
+	end
 
-		createStat(leaderstats, "Wins", 0)
-		createStat(leaderstats, "Size Coins", 0)
+	local today = os.date("!%Y-%j")
+	if profile.LastDailyGiftDay == today then
+		player:SetAttribute("DailyGiftClaimed", true)
+		return false, "Gift already claimed"
+	end
+
+	profile.LastDailyGiftDay = today
+	player:SetAttribute("DailyGiftClaimed", true)
+	CurrencyService.addCoins(player, rewardCoins or 25)
+	markDirty(player)
+	task.defer(CurrencyService.savePlayer, player)
+	return true
+end
+
+function CurrencyService.ownsCosmetic(player, name)
+	local profile = profiles[player]
+	return profile and profile.Purchases[name] == true
+end
+
+function CurrencyService.purchaseCosmetic(player, name, cost)
+	local profile = profiles[player]
+	if not profile then
+		return false, "Data loading"
+	end
+	if profile.Purchases[name] == true then
+		return true, "Owned"
+	end
+	if not CurrencyService.spendCoins(player, cost or 0) then
+		return false, "Need " .. tostring(cost or 0) .. " coins"
+	end
+
+	profile.Purchases[name] = true
+	player:SetAttribute(purchaseAttributeName(name), true)
+	markDirty(player)
+	task.defer(CurrencyService.savePlayer, player)
+	return true, "Bought"
+end
+
+function CurrencyService.equipCosmetic(player, name)
+	local profile = profiles[player]
+	if profile then
+		profile.EquippedCosmetic = name
+	end
+	player:SetAttribute("EquippedCosmetic", name)
+	markDirty(player)
+	task.defer(CurrencyService.savePlayer, player)
+end
+
+function CurrencyService.getEquippedCosmetic(player)
+	local profile = profiles[player]
+	return (profile and profile.EquippedCosmetic) or player:GetAttribute("EquippedCosmetic") or ""
+end
+
+local function setupPlayer(player)
+	local leaderstats = Instance.new("Folder")
+	leaderstats.Name = "leaderstats"
+	leaderstats.Parent = player
+
+	local wins = createStat(leaderstats, "Wins", 0)
+	local coins = createStat(leaderstats, "Size Coins", 0)
+
+	local profile = loadProfile(player)
+	profiles[player] = profile
+	applyProfile(player, profile)
+	player:SetAttribute("DataReady", true)
+
+	coins:GetPropertyChangedSignal("Value"):Connect(function()
+		local currentProfile = profiles[player]
+		if currentProfile then
+			currentProfile.Coins = cleanNumber(coins.Value)
+			markDirty(player)
+		end
+	end)
+
+	wins:GetPropertyChangedSignal("Value"):Connect(function()
+		local currentProfile = profiles[player]
+		if currentProfile then
+			currentProfile.Wins = cleanNumber(wins.Value)
+			markDirty(player)
+		end
+	end)
+end
+
+function CurrencyService.start()
+	for _, player in ipairs(Players:GetPlayers()) do
+		task.spawn(setupPlayer, player)
+	end
+
+	Players.PlayerAdded:Connect(setupPlayer)
+
+	Players.PlayerRemoving:Connect(function(player)
+		CurrencyService.savePlayer(player)
+		profiles[player] = nil
+		saving[player] = nil
+	end)
+
+	task.spawn(function()
+		while true do
+			task.wait(SAVE_INTERVAL)
+			for player, profile in pairs(profiles) do
+				if player.Parent and profile.Dirty then
+					task.spawn(CurrencyService.savePlayer, player)
+				end
+			end
+		end
+	end)
+
+	game:BindToClose(function()
+		for player in pairs(profiles) do
+			CurrencyService.savePlayer(player)
+		end
 	end)
 end
 
@@ -441,6 +777,86 @@ function FeedbackService.burst(parent, color, amount)
 	emitter:Emit(amount or 18)
 
 	Debris:AddItem(attachment, 1)
+end
+
+local function makeWorldEmitterPart(name, position)
+	local part = Instance.new("Part")
+	part.Name = name
+	part.Size = Vector3.new(0.4, 0.4, 0.4)
+	part.CFrame = CFrame.new(position)
+	part.Transparency = 1
+	part.Anchored = true
+	part.CanCollide = false
+	part.CanTouch = false
+	part.CanQuery = false
+	part.Parent = workspace
+	return part
+end
+
+function FeedbackService.splashAt(position)
+	local part = makeWorldEmitterPart("TG_WaterSplashFX", position)
+	local attachment = makeAttachment(part)
+
+	local splash = Instance.new("ParticleEmitter")
+	splash.Name = "SplashDroplets"
+	splash.Color = ColorSequence.new(Color3.fromRGB(130, 220, 255), Color3.fromRGB(245, 255, 255))
+	splash.LightEmission = 0.45
+	splash.Lifetime = NumberRange.new(0.35, 0.75)
+	splash.Rate = 0
+	splash.Speed = NumberRange.new(18, 30)
+	splash.SpreadAngle = Vector2.new(55, 55)
+	splash.Acceleration = Vector3.new(0, -55, 0)
+	splash.Size = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 0.32),
+		NumberSequenceKeypoint.new(1, 0),
+	})
+	splash.Parent = attachment
+	splash:Emit(34)
+
+	local foam = Instance.new("ParticleEmitter")
+	foam.Name = "SplashFoam"
+	foam.Color = ColorSequence.new(Color3.fromRGB(210, 245, 255))
+	foam.LightEmission = 0.25
+	foam.Lifetime = NumberRange.new(0.45, 0.85)
+	foam.Rate = 0
+	foam.Speed = NumberRange.new(3, 8)
+	foam.SpreadAngle = Vector2.new(180, 180)
+	foam.Size = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 1.15),
+		NumberSequenceKeypoint.new(1, 0),
+	})
+	foam.Parent = attachment
+	foam:Emit(10)
+
+	Debris:AddItem(part, 1.4)
+end
+
+function FeedbackService.confettiAt(position)
+	local part = makeWorldEmitterPart("TG_FinishConfettiFX", position)
+	local attachment = makeAttachment(part)
+
+	local confetti = Instance.new("ParticleEmitter")
+	confetti.Name = "FinishConfetti"
+	confetti.Color = ColorSequence.new({
+		ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 225, 60)),
+		ColorSequenceKeypoint.new(0.35, Color3.fromRGB(255, 90, 90)),
+		ColorSequenceKeypoint.new(0.7, Color3.fromRGB(80, 210, 255)),
+		ColorSequenceKeypoint.new(1, Color3.fromRGB(95, 255, 130)),
+	})
+	confetti.LightEmission = 0.4
+	confetti.Lifetime = NumberRange.new(1.0, 1.8)
+	confetti.Rate = 0
+	confetti.Speed = NumberRange.new(18, 32)
+	confetti.SpreadAngle = Vector2.new(65, 65)
+	confetti.Acceleration = Vector3.new(0, -35, 0)
+	confetti.Size = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 0.45),
+		NumberSequenceKeypoint.new(1, 0.12),
+	})
+	confetti.Parent = attachment
+	confetti:Emit(90)
+
+	Debris:AddItem(part, 2.4)
 end
 
 function FeedbackService.characterPulse(character, color)
@@ -761,6 +1177,10 @@ local function softReset(player, character, color)
 
 	resetCooldownByPlayer[player] = now
 	if character then
+		local root = character:FindFirstChild("HumanoidRootPart")
+		if root then
+			FeedbackService.splashAt(root.Position + Vector3.new(0, -2, 0))
+		end
 		restoreMovement(player, character)
 		FeedbackService.characterPulse(character, color or Color3.fromRGB(255, 85, 85))
 		moveCharacterToCurrentCheckpoint(player, character)
@@ -1985,6 +2405,8 @@ local CollectionService = game:GetService("CollectionService")
 local Players = game:GetService("Players")
 
 local START_TAG = "TG_StartPortal"
+local FACTORY_TAG = "TG_FactoryPortal"
+local COMPUTER_TAG = "TG_ComputerPortal"
 local LOBBY_TAG = "TG_LobbyReturn"
 local touchCooldown = {}
 
@@ -2016,6 +2438,18 @@ local function canUse(player)
 	return true
 end
 
+local function startCourseFromPortal(player, courseName, checkpointName)
+	player:SetAttribute("InLobby", false)
+	player:SetAttribute("CourseName", courseName)
+	player:SetAttribute("CurrentCheckpoint", "")
+	player:SetAttribute("CourseFinished", false)
+	player:SetAttribute("RunStartTime", nil)
+	player:SetAttribute("RunElapsedSeconds", nil)
+	player:SetAttribute("RunTimeSeconds", nil)
+	local start = workspace:FindFirstChild(checkpointName, true)
+	teleportCharacter(player, start)
+end
+
 local function connectStartPortal(part)
 	part.CanCollide = false
 	part.Touched:Connect(function(hit)
@@ -2024,14 +2458,31 @@ local function connectStartPortal(part)
 			return
 		end
 
-		player:SetAttribute("InLobby", false)
-		player:SetAttribute("CurrentCheckpoint", "")
-		player:SetAttribute("CourseFinished", false)
-		player:SetAttribute("RunStartTime", nil)
-		player:SetAttribute("RunElapsedSeconds", nil)
-		player:SetAttribute("RunTimeSeconds", nil)
-		local start = workspace:FindFirstChild("Checkpoint_1", true) or workspace:FindFirstChild("WipeoutStart", true)
-		teleportCharacter(player, start)
+		startCourseFromPortal(player, "WipeoutRun", "Checkpoint_1")
+	end)
+end
+
+local function connectFactoryPortal(part)
+	part.CanCollide = false
+	part.Touched:Connect(function(hit)
+		local player = getPlayerFromHit(hit)
+		if not player or not canUse(player) then
+			return
+		end
+
+		startCourseFromPortal(player, "FactoryChaos", "FactoryCheckpoint_1")
+	end)
+end
+
+local function connectComputerPortal(part)
+	part.CanCollide = false
+	part.Touched:Connect(function(hit)
+		local player = getPlayerFromHit(hit)
+		if not player or not canUse(player) then
+			return
+		end
+
+		startCourseFromPortal(player, "ComputerObby", "ComputerCheckpoint_1")
 	end)
 end
 
@@ -2044,6 +2495,7 @@ local function connectLobbyReturn(part)
 		end
 
 		player:SetAttribute("InLobby", true)
+		player:SetAttribute("CourseName", "")
 		player:SetAttribute("CurrentCheckpoint", "")
 		player:SetAttribute("CourseFinished", false)
 		player:SetAttribute("RunStartTime", nil)
@@ -2068,10 +2520,302 @@ local function connectTagged(tagName, connect)
 end
 
 connectTagged(START_TAG, connectStartPortal)
+connectTagged(FACTORY_TAG, connectFactoryPortal)
+connectTagged(COMPUTER_TAG, connectComputerPortal)
 connectTagged(LOBBY_TAG, connectLobbyReturn)
 
 Players.PlayerRemoving:Connect(function(player)
 	touchCooldown[player] = nil
+end)
+
+]================] },
+	{ service = "ServerScriptService", folders = {}, className = "Script", name = "WipeoutLobbyFeatures", source = [================[
+local CollectionService = game:GetService("CollectionService")
+local Debris = game:GetService("Debris")
+local Players = game:GetService("Players")
+local ServerScriptService = game:GetService("ServerScriptService")
+
+local FeedbackService = require(ServerScriptService:WaitForChild("TinyGiantObby"):WaitForChild("Services"):WaitForChild("FeedbackService"))
+local CurrencyService = require(ServerScriptService:WaitForChild("TinyGiantObby"):WaitForChild("Services"):WaitForChild("CurrencyService"))
+
+local DAILY_GIFT_TAG = "TG_DailyGiftPad"
+local COSMETIC_PAD_TAG = "TG_CosmeticShopPad"
+local touchCooldown = {}
+
+local function getPlayerFromHit(hit)
+	local character = hit and hit:FindFirstAncestorOfClass("Model")
+	return character and Players:GetPlayerFromCharacter(character)
+end
+
+local function canUse(player, part)
+	local now = os.clock()
+	local key = tostring(player.UserId) .. ":" .. part:GetFullName()
+	local last = touchCooldown[key] or 0
+	if now - last < 0.9 then
+		return false
+	end
+	touchCooldown[key] = now
+	return true
+end
+
+local function toast(player, text, color)
+	local character = player.Character
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+	if not root then
+		return
+	end
+
+	local gui = Instance.new("BillboardGui")
+	gui.Name = "LobbyToast"
+	gui.Size = UDim2.fromOffset(260, 54)
+	gui.StudsOffset = Vector3.new(0, 5, 0)
+	gui.AlwaysOnTop = true
+	gui.Parent = root
+
+	local label = Instance.new("TextLabel")
+	label.BackgroundColor3 = Color3.fromRGB(20, 24, 34)
+	label.BackgroundTransparency = 0.08
+	label.BorderSizePixel = 0
+	label.Size = UDim2.fromScale(1, 1)
+	label.Font = Enum.Font.GothamBlack
+	label.Text = text
+	label.TextColor3 = color or Color3.fromRGB(255, 235, 90)
+	label.TextScaled = true
+	label.TextWrapped = true
+	label.Parent = gui
+
+	Debris:AddItem(gui, 1.7)
+end
+
+local function equipTrail(player, color, name)
+	local character = player.Character
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+	if not root then
+		return
+	end
+
+	for _, child in ipairs(root:GetChildren()) do
+		if child.Name == "LobbyCosmeticTrail" or child.Name == "LobbyTrailAttachmentA" or child.Name == "LobbyTrailAttachmentB" then
+			child:Destroy()
+		end
+	end
+
+	local a0 = Instance.new("Attachment")
+	a0.Name = "LobbyTrailAttachmentA"
+	a0.Position = Vector3.new(-1.2, 1.1, 0.5)
+	a0.Parent = root
+
+	local a1 = Instance.new("Attachment")
+	a1.Name = "LobbyTrailAttachmentB"
+	a1.Position = Vector3.new(1.2, -1.1, 0.5)
+	a1.Parent = root
+
+	local trail = Instance.new("Trail")
+	trail.Name = "LobbyCosmeticTrail"
+	trail.Attachment0 = a0
+	trail.Attachment1 = a1
+	trail.Color = ColorSequence.new(color)
+	trail.LightEmission = 0.45
+	trail.Lifetime = 0.45
+	trail.Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 0.05),
+		NumberSequenceKeypoint.new(1, 1),
+	})
+	trail.WidthScale = NumberSequence.new(0.9)
+	trail.Parent = root
+
+	player:SetAttribute("EquippedCosmetic", name)
+end
+
+local function connectDailyGift(part)
+	part.CanCollide = false
+	part.Touched:Connect(function(hit)
+		local player = getPlayerFromHit(hit)
+		if not player or not canUse(player, part) then
+			return
+		end
+
+		local reward = part:GetAttribute("RewardCoins") or 25
+		local claimed, reason = CurrencyService.claimDailyGift(player, reward)
+		if not claimed then
+			toast(player, reason or "Gift already claimed", Color3.fromRGB(235, 240, 250))
+			FeedbackService.pulsePart(part, Color3.fromRGB(110, 130, 145))
+			return
+		end
+
+		toast(player, "+" .. tostring(reward) .. " COINS", Color3.fromRGB(100, 255, 140))
+		FeedbackService.pulsePart(part, Color3.fromRGB(100, 255, 140))
+		FeedbackService.burst(part, Color3.fromRGB(100, 255, 140), 30)
+	end)
+end
+
+local function connectCosmeticPad(part)
+	part.CanCollide = false
+	part.Touched:Connect(function(hit)
+		local player = getPlayerFromHit(hit)
+		if not player or not canUse(player, part) then
+			return
+		end
+
+		local name = part:GetAttribute("CosmeticName") or "Trail"
+		local cost = part:GetAttribute("Cost") or 25
+		local alreadyOwned = CurrencyService.ownsCosmetic(player, name)
+		local purchased, reason = CurrencyService.purchaseCosmetic(player, name, cost)
+		if not purchased then
+			toast(player, reason or ("Need " .. tostring(cost) .. " coins"), Color3.fromRGB(255, 120, 100))
+			FeedbackService.pulsePart(part, Color3.fromRGB(255, 120, 100))
+			return
+		end
+		if alreadyOwned then
+			toast(player, "Equipped " .. name, Color3.fromRGB(120, 220, 255))
+		elseif reason == "Bought" then
+			toast(player, "Bought " .. name, Color3.fromRGB(255, 235, 90))
+		else
+			toast(player, "Equipped " .. name, Color3.fromRGB(120, 220, 255))
+		end
+
+		local color = part:GetAttribute("TrailColor")
+		if typeof(color) ~= "Color3" then
+			color = Color3.fromRGB(255, 225, 70)
+		end
+		CurrencyService.equipCosmetic(player, name)
+		equipTrail(player, color, name)
+		FeedbackService.pulsePart(part, color)
+		FeedbackService.burst(part, color, 20)
+	end)
+end
+
+local function ensureWinsBoardGui()
+	local board = workspace:FindFirstChild("LobbyWinsBoard_Board", true)
+	if not board or not board:IsA("BasePart") then
+		return nil, nil, nil
+	end
+
+	local gui = board:FindFirstChild("WinsBoardGui")
+	if not gui then
+		gui = Instance.new("SurfaceGui")
+		gui.Name = "WinsBoardGui"
+		gui.Face = Enum.NormalId.Front
+		gui.SizingMode = Enum.SurfaceGuiSizingMode.PixelsPerStud
+		gui.PixelsPerStud = 40
+		gui.Parent = board
+
+		local title = Instance.new("TextLabel")
+		title.Name = "Title"
+		title.BackgroundTransparency = 1
+		title.Position = UDim2.fromScale(0.06, 0.08)
+		title.Size = UDim2.fromScale(0.88, 0.25)
+		title.Font = Enum.Font.GothamBlack
+		title.TextColor3 = Color3.fromRGB(80, 210, 255)
+		title.TextScaled = true
+		title.TextXAlignment = Enum.TextXAlignment.Left
+		title.Parent = gui
+
+		local rows = Instance.new("TextLabel")
+		rows.Name = "Rows"
+		rows.BackgroundTransparency = 1
+		rows.Position = UDim2.fromScale(0.08, 0.36)
+		rows.Size = UDim2.fromScale(0.84, 0.54)
+		rows.Font = Enum.Font.GothamBold
+		rows.TextColor3 = Color3.fromRGB(245, 250, 255)
+		rows.TextScaled = true
+		rows.TextWrapped = true
+		rows.TextXAlignment = Enum.TextXAlignment.Left
+		rows.TextYAlignment = Enum.TextYAlignment.Top
+		rows.Parent = gui
+	end
+
+	return board, gui:FindFirstChild("Title"), gui:FindFirstChild("Rows")
+end
+
+local function updateWinsBoard()
+	local _, title, rows = ensureWinsBoardGui()
+	if not title or not rows then
+		return
+	end
+
+	local ranked = {}
+	for _, player in ipairs(Players:GetPlayers()) do
+		local leaderstats = player:FindFirstChild("leaderstats")
+		local wins = leaderstats and leaderstats:FindFirstChild("Wins")
+		table.insert(ranked, {
+			Name = player.DisplayName or player.Name,
+			Wins = wins and wins.Value or 0,
+		})
+	end
+	table.sort(ranked, function(a, b)
+		if a.Wins == b.Wins then
+			return a.Name < b.Name
+		end
+		return a.Wins > b.Wins
+	end)
+
+	title.Text = "WINS BOARD"
+	local lines = {}
+	for i = 1, math.min(5, #ranked) do
+		table.insert(lines, string.format("%d. %s  -  %d", i, ranked[i].Name, ranked[i].Wins))
+	end
+	if #lines == 0 then
+		table.insert(lines, "No runners yet.")
+	end
+	rows.Text = table.concat(lines, "\n")
+end
+
+local function connectTagged(tagName, connect)
+	for _, part in ipairs(CollectionService:GetTagged(tagName)) do
+		if part:IsA("BasePart") then
+			connect(part)
+		end
+	end
+	CollectionService:GetInstanceAddedSignal(tagName):Connect(function(part)
+		if part:IsA("BasePart") then
+			connect(part)
+		end
+	end)
+end
+
+connectTagged(DAILY_GIFT_TAG, connectDailyGift)
+connectTagged(COSMETIC_PAD_TAG, connectCosmeticPad)
+
+local function setupPlayer(player)
+	player.CharacterAdded:Connect(function()
+		local equipped = CurrencyService.getEquippedCosmetic(player)
+		if equipped == "Gold Trail" then
+			task.wait(0.3)
+			equipTrail(player, Color3.fromRGB(255, 225, 70), equipped)
+		elseif equipped == "Neon Trail" then
+			task.wait(0.3)
+			equipTrail(player, Color3.fromRGB(170, 95, 255), equipped)
+		end
+	end)
+	local leaderstats = player:WaitForChild("leaderstats", 10)
+	local wins = leaderstats and leaderstats:WaitForChild("Wins", 10)
+	if wins then
+		wins:GetPropertyChangedSignal("Value"):Connect(updateWinsBoard)
+	end
+	task.defer(updateWinsBoard)
+end
+
+for _, player in ipairs(Players:GetPlayers()) do
+	task.spawn(setupPlayer, player)
+end
+
+Players.PlayerAdded:Connect(setupPlayer)
+
+Players.PlayerRemoving:Connect(function(player)
+	task.defer(updateWinsBoard)
+	for key in pairs(touchCooldown) do
+		if key:find(tostring(player.UserId) .. ":", 1, true) then
+			touchCooldown[key] = nil
+		end
+	end
+end)
+
+task.spawn(function()
+	while true do
+		updateWinsBoard()
+		task.wait(5)
+	end
 end)
 
 ]================] },
@@ -2136,6 +2880,711 @@ RunService.Heartbeat:Connect(function(deltaTime)
 		end
 	end
 end)
+
+]================] },
+	{ service = "ServerScriptService", folders = {}, className = "Script", name = "WipeoutQARunner", source = [================[
+local CollectionService = game:GetService("CollectionService")
+local HttpService = game:GetService("HttpService")
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local QA = {}
+local running = false
+
+local COURSE_ORDER = {"WipeoutRun", "FactoryChaos", "ComputerObby"}
+
+local COURSES = {
+	WipeoutRun = {
+		title = "Wipeout Run",
+		startCheckpoint = "Checkpoint_1",
+		startPad = "StepPad_1",
+		finish = "FinishGate",
+		bestAttribute = "BestRunTimeSeconds",
+		route = {
+			{name = "StepPad_1"},
+			{name = "StepPad_2", jump = true},
+			{name = "StepPad_3", jump = true},
+			{name = "StepPad_4", jump = true},
+			{name = "Checkpoint_2"},
+			{name = "SweeperDeck_Runway"},
+			{name = "Checkpoint_3"},
+			{name = "PunchCorridor_WideRun"},
+			{name = "Checkpoint_4"},
+			{name = "FinalBridge_WideRun"},
+			{name = "Checkpoint_5"},
+			{name = "TiltTable_1"},
+			{name = "TiltTable_2"},
+			{name = "TiltTable_3"},
+			{name = "Checkpoint_7"},
+			{name = "LaunchLagoon_Jump_1_OrangeRamp", pause = 0.25},
+			{name = "LaunchLagoon_Landing_1", timeout = 5},
+			{name = "LaunchLagoon_Jump_2_OrangeRamp", pause = 0.25},
+			{name = "LaunchLagoon_Landing_2", timeout = 5},
+			{name = "Checkpoint_8"},
+			{name = "SwingBalls_Bridge"},
+			{name = "FinishGate"},
+		},
+	},
+	FactoryChaos = {
+		title = "Factory Chaos",
+		startCheckpoint = "FactoryCheckpoint_1",
+		startPad = "FactoryStartPad",
+		finish = "FactoryFinishGate",
+		bestAttribute = "BestFactoryTimeSeconds",
+		route = {
+			{name = "FactoryStartPad"},
+			{name = "FactoryCheckpoint_2", timeout = 10},
+			{name = "FactoryPresses_Runway"},
+			{name = "FactoryCheckpoint_3"},
+			{name = "FactoryGearTable_264"},
+			{name = "FactoryGearTable_294"},
+			{name = "FactoryGearTable_324"},
+			{name = "FactoryCheckpoint_4"},
+			{name = "FactoryCrates_Bridge"},
+			{name = "FactoryFinishGate"},
+		},
+	},
+	ComputerObby = {
+		title = "Escape CPU",
+		startCheckpoint = "ComputerCheckpoint_1",
+		startPad = "ComputerStartPad",
+		finish = "ComputerFinishGate",
+		bestAttribute = "BestComputerTimeSeconds",
+		route = {
+			{name = "ComputerStartPad"},
+			{name = "ComputerCheckpoint_2", timeout = 10},
+			{name = "ComputerFirewall_Runway"},
+			{name = "ComputerCheckpoint_3"},
+			{name = "ComputerFans_Bridge"},
+			{name = "ComputerCheckpoint_4"},
+			{name = "ComputerCache_Pad_376", jump = true},
+			{name = "ComputerCache_Pad_398", jump = true},
+			{name = "ComputerCache_Pad_420", jump = true},
+			{name = "ComputerCache_Pad_442", jump = true},
+			{name = "ComputerFinishGate"},
+		},
+	},
+}
+
+local function getCourseFolder()
+	return workspace:FindFirstChild("TinyGiantGraybox")
+end
+
+local function findPart(name)
+	local folder = getCourseFolder()
+	local part = folder and folder:FindFirstChild(name, true)
+	return part and part:IsA("BasePart") and part or nil
+end
+
+local function getFirstPlayer()
+	return Players:GetPlayers()[1]
+end
+
+local function getCharacterParts(player)
+	local character = player and player.Character
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+	return character, humanoid, root
+end
+
+local function waitForCharacterReady(player, timeout)
+	timeout = timeout or 6
+	local started = os.clock()
+	while os.clock() - started < timeout do
+		local character, humanoid, root = getCharacterParts(player)
+		if character and humanoid and root and humanoid.Health > 0 then
+			return character, humanoid, root
+		end
+		task.wait(0.1)
+	end
+	return getCharacterParts(player)
+end
+
+local function leaderstatValue(player, name)
+	local leaderstats = player and player:FindFirstChild("leaderstats")
+	local value = leaderstats and leaderstats:FindFirstChild(name)
+	return value and value.Value or 0
+end
+
+local function faceForward(root, position)
+	root.CFrame = CFrame.lookAt(position, position + Vector3.new(0, 0, 1))
+	root.AssemblyLinearVelocity = Vector3.zero
+	root.AssemblyAngularVelocity = Vector3.zero
+end
+
+local function teleportToPart(player, part)
+	local _, _, root = getCharacterParts(player)
+	if not root or not part then
+		return false
+	end
+	faceForward(root, part.Position + Vector3.new(0, 5, -2))
+	return true
+end
+
+local function setCourseState(player, courseName)
+	player:SetAttribute("InLobby", false)
+	player:SetAttribute("CourseName", courseName)
+	player:SetAttribute("CurrentCheckpoint", "")
+	player:SetAttribute("CourseFinished", false)
+	player:SetAttribute("RunStartTime", nil)
+	player:SetAttribute("RunElapsedSeconds", nil)
+	player:SetAttribute("RunTimeSeconds", nil)
+end
+
+local function waitForRunStart(player, timeout)
+	local started = os.clock()
+	while os.clock() - started < timeout do
+		if typeof(player:GetAttribute("RunStartTime")) == "number" then
+			return true
+		end
+		task.wait(0.1)
+	end
+	return false
+end
+
+local function horizontalDistance(a, b)
+	local delta = a - b
+	return Vector3.new(delta.X, 0, delta.Z).Magnitude
+end
+
+local function waitForNear(root, target, tolerance, timeout)
+	local started = os.clock()
+	local closest = math.huge
+	local lastPosition = root.Position
+	local lastProgressAt = os.clock()
+	while os.clock() - started < timeout do
+		local distance = horizontalDistance(root.Position, target)
+		closest = math.min(closest, distance)
+		if distance <= tolerance then
+			return true, closest, os.clock() - started, false
+		end
+		if (root.Position - lastPosition).Magnitude > 1.25 then
+			lastPosition = root.Position
+			lastProgressAt = os.clock()
+		end
+		if os.clock() - lastProgressAt > math.min(3.5, timeout * 0.5) then
+			return false, closest, os.clock() - started, true
+		end
+		task.wait(0.1)
+	end
+	return false, closest, timeout, false
+end
+
+local function moveToPart(player, part, waypoint, timeout)
+	local _, humanoid, root = getCharacterParts(player)
+	if not humanoid or not root or not part then
+		return false, "missing character or part", math.huge, 0
+	end
+
+	local target = part.Position + Vector3.new(0, 3, 0)
+	if waypoint.jump then
+		humanoid.Jump = true
+	end
+	humanoid:MoveTo(target)
+	local tolerance = waypoint.tolerance or math.max(5, math.min(part.Size.X, part.Size.Z) * 0.55)
+	local reached, closest, elapsed, stalled = waitForNear(root, target, tolerance, timeout)
+	if reached then
+		return true, nil, closest, elapsed
+	end
+
+	return false, stalled and "stalled" or "timeout", closest, elapsed
+end
+
+local function safeJson(value)
+	local ok, encoded = pcall(function()
+		return HttpService:JSONEncode(value)
+	end)
+	return ok and encoded or "{}"
+end
+
+local function partExtentsOverlap(a, b)
+	return math.abs(a.Position.X - b.Position.X) < (a.Size.X + b.Size.X) * 0.5
+		and math.abs(a.Position.Z - b.Position.Z) < (a.Size.Z + b.Size.Z) * 0.5
+end
+
+local function scanNearCoplanar(folder)
+	local results = {}
+	local visibleParts = {}
+	for _, part in ipairs(folder:GetDescendants()) do
+		if part:IsA("BasePart") and part.Transparency < 0.95 then
+			table.insert(visibleParts, part)
+		end
+	end
+
+	for i = 1, #visibleParts do
+		local a = visibleParts[i]
+		for j = i + 1, #visibleParts do
+			local b = visibleParts[j]
+			if partExtentsOverlap(a, b) then
+				local aTop = a.Position.Y + a.Size.Y * 0.5
+				local bBottom = b.Position.Y - b.Size.Y * 0.5
+				local bTop = b.Position.Y + b.Size.Y * 0.5
+				local aBottom = a.Position.Y - a.Size.Y * 0.5
+				local gapAB = math.abs(bBottom - aTop)
+				local gapBA = math.abs(aBottom - bTop)
+				if (gapAB < 0.04 or gapBA < 0.04) and #results < 80 then
+					table.insert(results, {
+						a = a.Name,
+						b = b.Name,
+						gap = math.min(gapAB, gapBA),
+					})
+				end
+			end
+		end
+	end
+	return results
+end
+
+local function scanCourseGaps()
+	local gaps = {}
+	for courseName, course in pairs(COURSES) do
+		local previousPart
+		for _, waypoint in ipairs(course.route) do
+			local part = findPart(waypoint.name)
+			if previousPart and part then
+				local edgeGap = horizontalDistance(previousPart.Position, part.Position)
+					- math.max(previousPart.Size.X, previousPart.Size.Z) * 0.5
+					- math.max(part.Size.X, part.Size.Z) * 0.5
+				if edgeGap > 9 then
+					table.insert(gaps, {
+						course = courseName,
+						from = previousPart.Name,
+						to = part.Name,
+						edgeGap = edgeGap,
+					})
+				end
+			end
+			previousPart = part or previousPart
+		end
+	end
+	return gaps
+end
+
+local function countTaggedParts(tagName)
+	local count = 0
+	for _, instance in ipairs(CollectionService:GetTagged(tagName)) do
+		if instance:IsA("BasePart") then
+			count += 1
+		end
+	end
+	return count
+end
+
+local function sampleMovingParts(seconds)
+	local trackedTags = {
+		TG_Sweeper = "sweepers",
+		TG_SwingBall = "swingBalls",
+		TG_Crusher = "crushers",
+		TG_Tilter = "tilters",
+		TG_Conveyor = "conveyors",
+	}
+	local samples = {}
+	for tagName, label in pairs(trackedTags) do
+		samples[label] = {tag = tagName, total = 0, moving = 0, stationary = {}}
+		for _, part in ipairs(CollectionService:GetTagged(tagName)) do
+			if part:IsA("BasePart") then
+				samples[label].total += 1
+				table.insert(samples[label], {
+					part = part,
+					name = part.Name,
+					start = part.CFrame,
+				})
+			end
+		end
+	end
+
+	task.wait(seconds)
+
+	for _, sample in pairs(samples) do
+		for _, item in ipairs(sample) do
+			if item.part and item.part.Parent then
+				local positionDelta = (item.part.Position - item.start.Position).Magnitude
+				local lookDelta = (item.part.CFrame.LookVector - item.start.LookVector).Magnitude
+				if positionDelta > 0.15 or lookDelta > 0.08 then
+					sample.moving += 1
+				elseif sample.tag ~= "TG_Conveyor" then
+					table.insert(sample.stationary, item.name)
+				end
+			end
+			item.part = nil
+			item.start = nil
+		end
+	end
+
+	return samples
+end
+
+local function geometryAudit(options)
+	options = options or {}
+	local folder = getCourseFolder()
+	local audit = {
+		missingCritical = {},
+		visibleNearCoplanar = {},
+		routeGaps = {},
+		roofCollisions = {},
+		courseCounts = {},
+		tagCounts = {
+			coins = countTaggedParts("TG_Coin"),
+			checkpoints = countTaggedParts("TG_Checkpoint"),
+			finishGates = countTaggedParts("TG_Finish"),
+			conveyors = countTaggedParts("TG_Conveyor"),
+			sweepers = countTaggedParts("TG_Sweeper"),
+			swingBalls = countTaggedParts("TG_SwingBall"),
+			crushers = countTaggedParts("TG_Crusher"),
+		},
+		motion = {},
+	}
+	if not folder then
+		table.insert(audit.missingCritical, "TinyGiantGraybox")
+		return audit
+	end
+
+	for _, courseName in ipairs(COURSE_ORDER) do
+		local course = COURSES[courseName]
+		audit.courseCounts[courseName] = {
+			checkpoints = 0,
+			coins = 0,
+			roofParts = 0,
+		}
+		for _, required in ipairs({course.startCheckpoint, course.startPad, course.finish}) do
+			if not findPart(required) then
+				table.insert(audit.missingCritical, courseName .. ":" .. required)
+			end
+		end
+	end
+
+	for _, part in ipairs(folder:GetDescendants()) do
+		if part:IsA("BasePart") then
+			local courseName = part:GetAttribute("CourseName")
+			if courseName and audit.courseCounts[courseName] and part.Name:find("Checkpoint") then
+				audit.courseCounts[courseName].checkpoints += 1
+			end
+			if CollectionService:HasTag(part, "TG_Coin") then
+				if part.Name:find("Factory") then
+					audit.courseCounts.FactoryChaos.coins += 1
+				elseif part.Name:find("Computer") then
+					audit.courseCounts.ComputerObby.coins += 1
+				elseif not part.Name:find("Lobby") then
+					audit.courseCounts.WipeoutRun.coins += 1
+				end
+			end
+			if part.Name:find("FactoryRoof") then
+				audit.courseCounts.FactoryChaos.roofParts += 1
+			elseif part.Name:find("ComputerRoof") then
+				audit.courseCounts.ComputerObby.roofParts += 1
+			end
+			if (part.Name:find("Roof") or part.Name:find("Ceiling")) and part.CanCollide then
+				table.insert(audit.roofCollisions, part.Name)
+			end
+		end
+	end
+
+	audit.visibleNearCoplanar = scanNearCoplanar(folder)
+	audit.routeGaps = scanCourseGaps()
+	audit.motion = sampleMovingParts(options.motionSampleSeconds or 1.25)
+	return audit
+end
+
+local function runCourse(courseName, options)
+	options = options or {}
+	local course = COURSES[courseName]
+	local player = options.player or getFirstPlayer()
+	local report = {
+		course = courseName,
+		title = course and course.title or courseName,
+		mode = options.assistAfterTimeout and "assisted-after-failure" or "strict-physics",
+		completed = false,
+		failReason = nil,
+		timeSeconds = 0,
+		waypointsReached = 0,
+		waypointsTotal = course and #course.route or 0,
+		stuckPoints = {},
+		resetCount = 0,
+		checkpointsTouched = 0,
+		coinsGained = 0,
+		winsGained = 0,
+		bestTime = nil,
+		minWaypointDistances = {},
+		maxWaypointSeconds = 0,
+	}
+	if not course then
+		report.failReason = "Unknown course"
+		return report
+	end
+	if not player then
+		report.failReason = "No player in Play mode"
+		return report
+	end
+
+	local character, humanoid, root = waitForCharacterReady(player, options.characterTimeout or 6)
+	if not character or not humanoid or not root or humanoid.Health <= 0 then
+		player:LoadCharacter()
+		character, humanoid, root = waitForCharacterReady(player, options.characterTimeout or 6)
+	end
+	if not character or not humanoid or not root or humanoid.Health <= 0 then
+		report.failReason = "Player character not ready"
+		return report
+	end
+
+	local startCheckpoint = findPart(course.startCheckpoint)
+	local startPad = findPart(course.startPad)
+	if not startCheckpoint or not startPad then
+		report.failReason = "Missing start checkpoint or start pad"
+		return report
+	end
+
+	local startCoins = leaderstatValue(player, "Size Coins")
+	local startWins = leaderstatValue(player, "Wins")
+	setCourseState(player, courseName)
+	teleportToPart(player, startCheckpoint)
+	task.wait(options.settleTime or 0.35)
+	teleportToPart(player, startPad)
+	task.wait(options.settleTime or 0.35)
+	if not waitForRunStart(player, options.timerTimeout or 3) then
+		report.failReason = "Timer did not start on start pad"
+		return report
+	end
+
+	local startedAt = os.clock()
+	local lastCheckpoint = player:GetAttribute("CurrentCheckpoint")
+	local lastZ = root.Position.Z
+	for _, waypoint in ipairs(course.route) do
+		local part = findPart(waypoint.name)
+		if not part then
+			table.insert(report.stuckPoints, waypoint.name .. " missing")
+			report.failReason = "Missing waypoint"
+			break
+		end
+
+		local timeout = waypoint.timeout or options.waypointTimeout or 8
+		local ok, reason, closest, elapsed = moveToPart(player, part, waypoint, timeout)
+		table.insert(report.minWaypointDistances, {
+			name = waypoint.name,
+			closest = closest,
+			seconds = elapsed,
+		})
+		report.maxWaypointSeconds = math.max(report.maxWaypointSeconds, elapsed or 0)
+
+		local currentCheckpoint = player:GetAttribute("CurrentCheckpoint")
+		if currentCheckpoint ~= lastCheckpoint then
+			report.checkpointsTouched += 1
+			lastCheckpoint = currentCheckpoint
+		end
+
+		local _, _, currentRoot = getCharacterParts(player)
+		if currentRoot and currentRoot.Position.Z < lastZ - 18 then
+			report.resetCount += 1
+		end
+		if currentRoot then
+			lastZ = currentRoot.Position.Z
+		end
+
+		if not ok then
+			local stuck = string.format("%s %s closest=%.1f", waypoint.name, reason or "failed", closest or -1)
+			table.insert(report.stuckPoints, stuck)
+			report.failReason = "Movement " .. (reason or "failed")
+			if options.assistAfterTimeout then
+				teleportToPart(player, part)
+				task.wait(options.settleTime or 0.25)
+			else
+				break
+			end
+		else
+			report.waypointsReached += 1
+		end
+
+		task.wait(waypoint.pause or options.waypointPause or 0.1)
+	end
+
+	local finish = findPart(course.finish)
+	if finish and (options.assistAfterTimeout or not report.failReason) then
+		moveToPart(player, finish, options.waypointTimeout or 8)
+		task.wait(0.5)
+	end
+
+	report.completed = player:GetAttribute("CourseFinished") == true
+	report.timeSeconds = player:GetAttribute("RunTimeSeconds") or player:GetAttribute("RunElapsedSeconds") or (os.clock() - startedAt)
+	report.bestTime = player:GetAttribute(course.bestAttribute)
+	report.coinsGained = leaderstatValue(player, "Size Coins") - startCoins
+	report.winsGained = leaderstatValue(player, "Wins") - startWins
+	if not report.completed and not report.failReason then
+		report.failReason = "Finish did not complete"
+	end
+
+	return report
+end
+
+local function writeReport(report)
+	local folder = ReplicatedStorage:FindFirstChild("WipeoutQAReports")
+	if not folder then
+		folder = Instance.new("Folder")
+		folder.Name = "WipeoutQAReports"
+		folder.Parent = ReplicatedStorage
+	end
+	folder:ClearAllChildren()
+
+	local summary = Instance.new("StringValue")
+	summary.Name = "LatestSummary"
+	summary.Value = report.summary
+	summary.Parent = folder
+
+	local json = Instance.new("StringValue")
+	json.Name = "LatestJson"
+	json.Value = safeJson(report)
+	json.Parent = folder
+
+	for index, courseReport in ipairs(report.courses) do
+		local value = Instance.new("StringValue")
+		value.Name = string.format("%02d_%s", index, courseReport.course)
+		value.Value = string.format(
+			"mode=%s completed=%s time=%.1f reached=%d/%d resets=%d checkpoints=%d coins=%d wins=%d fail=%s",
+			courseReport.mode or "unknown",
+			tostring(courseReport.completed),
+			courseReport.timeSeconds or 0,
+			courseReport.waypointsReached or 0,
+			courseReport.waypointsTotal or 0,
+			courseReport.resetCount or 0,
+			courseReport.checkpointsTouched or 0,
+			courseReport.coinsGained or 0,
+			courseReport.winsGained or 0,
+			courseReport.failReason or "none"
+		)
+		value.Parent = folder
+	end
+end
+
+local function summarize(report)
+	local completed = 0
+	local totalTime = 0
+	local totalResets = 0
+	for _, courseReport in ipairs(report.courses) do
+		if courseReport.completed then
+			completed += 1
+		end
+		totalTime += courseReport.timeSeconds or 0
+		totalResets += courseReport.resetCount or 0
+	end
+	report.summary = string.format(
+		"mode=%s courses_completed=%d/3 total_time=%.1f total_resets=%d missing=%d zfight=%d roof_collisions=%d route_gaps=%d",
+		report.mode,
+		completed,
+		totalTime,
+		totalResets,
+		#report.geometry.missingCritical,
+		#report.geometry.visibleNearCoplanar,
+		#report.geometry.roofCollisions,
+		#report.geometry.routeGaps
+	)
+end
+
+function QA.RunCourse(courseName, options)
+	if running then
+		return {error = "QA runner already active"}
+	end
+	running = true
+	local ok, result = pcall(runCourse, courseName, options or {})
+	running = false
+	if not ok then
+		return {error = tostring(result)}
+	end
+	return result
+end
+
+function QA.AuditGeometry(options)
+	return geometryAudit(options)
+end
+
+function QA.RunAll(options)
+	if running then
+		return {error = "QA runner already active"}
+	end
+	running = true
+	options = options or {}
+	local report = {
+		generatedAt = os.date("!%Y-%m-%dT%H:%M:%SZ"),
+		mode = options.assistAfterTimeout and "assisted-after-failure" or "strict-physics",
+		geometry = geometryAudit(options),
+		courses = {},
+		summary = "",
+	}
+	for _, courseName in ipairs(COURSE_ORDER) do
+		table.insert(report.courses, runCourse(courseName, options))
+	end
+
+	summarize(report)
+	writeReport(report)
+	print("[WipeoutQA] " .. report.summary)
+	for _, courseReport in ipairs(report.courses) do
+		print(string.format(
+			"[WipeoutQA] %s mode=%s completed=%s time=%.1f waypoints=%d/%d resets=%d coins=%d wins=%d fail=%s",
+			courseReport.course,
+			courseReport.mode or "unknown",
+			tostring(courseReport.completed),
+			courseReport.timeSeconds or 0,
+			courseReport.waypointsReached or 0,
+			courseReport.waypointsTotal or 0,
+			courseReport.resetCount or 0,
+			courseReport.coinsGained or 0,
+			courseReport.winsGained or 0,
+			courseReport.failReason or "none"
+		))
+	end
+	running = false
+	return report
+end
+
+function QA.EnhancementIdeas(report)
+	report = report or {geometry = geometryAudit(), courses = {}}
+	local ideas = {}
+	if report.geometry then
+		if #report.geometry.visibleNearCoplanar > 0 then
+			table.insert(ideas, "Fix visible near-coplanar geometry before adding more content.")
+		end
+		if #report.geometry.roofCollisions > 0 then
+			table.insert(ideas, "Make roof/ceiling parts non-colliding so presentation never blocks play.")
+		end
+		if #report.geometry.routeGaps > 0 then
+			table.insert(ideas, "Review large route gaps; mark intentional launch gaps separately from ordinary jumps.")
+		end
+	end
+	for _, courseReport in ipairs(report.courses or {}) do
+		if not courseReport.completed then
+			table.insert(ideas, courseReport.title .. ": inspect " .. (courseReport.stuckPoints[1] or courseReport.failReason or "unknown blockage") .. ".")
+		elseif courseReport.resetCount == 0 and courseReport.timeSeconds < 25 then
+			table.insert(ideas, courseReport.title .. ": add one readable timing choice or coin risk path.")
+		elseif courseReport.coinsGained <= 0 then
+			table.insert(ideas, courseReport.title .. ": add coin placement along the expected line, not only risky side paths.")
+		end
+	end
+	if #ideas == 0 then
+		table.insert(ideas, "Add medal times, bonus coin routes, and a lobby board so repeat runs have goals.")
+	end
+	return ideas
+end
+
+_G.WipeoutQA = QA
+print("[WipeoutQA] Loaded. In Play mode run: return _G.WipeoutQA.RunAll({waypointTimeout = 8})")
+
+local qaInvoke = ReplicatedStorage:FindFirstChild("WipeoutQAInvoke")
+if not qaInvoke then
+	qaInvoke = Instance.new("BindableFunction")
+	qaInvoke.Name = "WipeoutQAInvoke"
+	qaInvoke.Parent = ReplicatedStorage
+end
+
+qaInvoke.OnInvoke = function(action, options, courseName)
+	if action == "RunAll" then
+		return QA.RunAll(options or {})
+	elseif action == "RunCourse" then
+		return QA.RunCourse(courseName, options or {})
+	elseif action == "AuditGeometry" then
+		return QA.AuditGeometry(options or {})
+	elseif action == "EnhancementIdeas" then
+		return QA.EnhancementIdeas(options)
+	end
+	return {error = "Unknown QA action: " .. tostring(action)}
+end
+
 
 ]================] },
 	{ service = "StarterPlayer", folders = {"StarterPlayerScripts", "TinyGiantObby"}, className = "LocalScript", name = "SizeClient", source = [================[
@@ -2306,51 +3755,110 @@ local function currentZ()
 	return root and root.Position.Z or -math.huge
 end
 
-local objectives = {
-	{
-		text = "Obstacle 1: cross the floating step pads over the water.",
-		done = function() return currentZ() > 84 end,
-		doneText = "STEP PADS CLEARED!"
+local objectiveSets = {
+	WipeoutRun = {
+		title = "WIPEOUT RUN",
+		bestAttribute = "BestRunTimeSeconds",
+		objectives = {
+			{
+				text = "Obstacle 1: cross the floating step pads over the water.",
+				done = function() return currentZ() > 84 end,
+				doneText = "STEP PADS CLEARED!"
+			},
+			{
+				text = "Obstacle 2: time your jump over the spinning yellow arm.",
+				done = function() return currentZ() > 150 end,
+				doneText = "SPINNER CLEARED!"
+			},
+			{
+				text = "Obstacle 3: dodge the moving punch blocks.",
+				done = function() return currentZ() > 232 end,
+				doneText = "PUNCH BLOCKS CLEARED!"
+			},
+			{
+				text = "Obstacle 4: stay on the narrow bridge over the water.",
+				done = function() return currentZ() > 326 end,
+				doneText = "FINAL BRIDGE CLEARED!"
+			},
+			{
+				text = "Obstacle 5: keep your balance across the tilting tables.",
+				done = function() return currentZ() > 468 end,
+				doneText = "TILTING TABLES CLEARED!"
+			},
+			{
+				text = "Obstacle 6: time the launch pads across the lagoon.",
+				done = function() return currentZ() > 650 end,
+				doneText = "LAUNCH LAGOON CLEARED!"
+			},
+			{
+				text = "Obstacle 7: dodge the swinging red balls.",
+				done = function() return currentZ() > 735 end,
+				doneText = "SWING BALLS CLEARED!"
+			},
+			{
+				text = "Finish: run through the yellow finish gate.",
+				done = function() return player:GetAttribute("CourseFinished") == true end,
+				doneText = "WIPEOUT RUN CLEARED!"
+			},
+		},
 	},
-	{
-		text = "Obstacle 2: time your jump over the spinning yellow arm.",
-		done = function() return currentZ() > 150 end,
-		doneText = "SPINNER CLEARED!"
+	FactoryChaos = {
+		title = "FACTORY CHAOS",
+		bestAttribute = "BestFactoryTimeSeconds",
+		objectives = {
+			{
+				text = "Step onto the green start pad, then ride the conveyor lanes.",
+				done = function() return currentZ() > 70 end,
+				doneText = "CONVEYORS CLEARED!"
+			},
+			{
+				text = "Watch the warning stripes and slip past the stamp presses.",
+				done = function() return currentZ() > 178 end,
+				doneText = "STAMP PRESSES CLEARED!"
+			},
+			{
+				text = "Cross the gear tables while the yellow arms sweep the lanes.",
+				done = function() return currentZ() > 286 end,
+				doneText = "GEAR FLOOR CLEARED!"
+			},
+			{
+				text = "Dodge the swinging toy crates and run through the finish gate.",
+				done = function() return player:GetAttribute("CourseFinished") == true end,
+				doneText = "FACTORY CHAOS CLEARED!"
+			},
+		},
 	},
-	{
-		text = "Obstacle 3: dodge the moving punch blocks.",
-		done = function() return currentZ() > 232 end,
-		doneText = "PUNCH BLOCKS CLEARED!"
-	},
-	{
-		text = "Obstacle 4: stay on the narrow bridge over the water.",
-		done = function() return currentZ() > 326 end,
-		doneText = "FINAL BRIDGE CLEARED!"
-	},
-	{
-		text = "Obstacle 5: keep your balance across the tilting tables.",
-		done = function() return currentZ() > 468 end,
-		doneText = "TILTING TABLES CLEARED!"
-	},
-	{
-		text = "Obstacle 6: time the launch pads across the lagoon.",
-		done = function() return currentZ() > 650 end,
-		doneText = "LAUNCH LAGOON CLEARED!"
-	},
-	{
-		text = "Obstacle 7: dodge the swinging red balls.",
-		done = function() return currentZ() > 735 end,
-		doneText = "SWING BALLS CLEARED!"
-	},
-	{
-		text = "Finish: run through the yellow finish gate.",
-		done = function() return player:GetAttribute("CourseFinished") == true end,
-		doneText = "WIPEOUT RUN CLEARED!"
+	ComputerObby = {
+		title = "ESCAPE CPU",
+		bestAttribute = "BestComputerTimeSeconds",
+		objectives = {
+			{
+				text = "Obstacle 1: ride the glowing data buses and dodge packet blocks.",
+				done = function() return currentZ() > 108 end,
+				doneText = "DATA BUS CLEARED!"
+			},
+			{
+				text = "Obstacle 2: slip through the moving red firewall shutters.",
+				done = function() return currentZ() > 232 end,
+				doneText = "FIREWALL CLEARED!"
+			},
+			{
+				text = "Obstacle 3: time your run through the cooling fan blades.",
+				done = function() return currentZ() > 348 end,
+				doneText = "COOLING FANS CLEARED!"
+			},
+			{
+				text = "Obstacle 4: cross the cache pads and dodge corrupt swinging blocks.",
+				done = function() return player:GetAttribute("CourseFinished") == true end,
+				doneText = "CPU ESCAPED!"
+			},
+		},
 	},
 }
 
 local currentObjective = 1
 local completed = {}
+local activeCourseName = nil
 local lastSteerSent = 0
 local lastSteerValue = 0
 local heldLeft = 0
@@ -2363,6 +3871,25 @@ local runTimerSeenValue = nil
 local runTimerLocalStart = nil
 
 local function updateMission()
+	local courseName = player:GetAttribute("CourseName")
+	if courseName == nil or courseName == "" or player:GetAttribute("InLobby") == true then
+		if activeCourseName ~= "Hub" then
+			activeCourseName = "Hub"
+			currentObjective = 1
+			completed = {}
+		end
+		missionTitle.Text = "WIPEOUT HUB"
+		missionText.Text = "Step on yellow for Wipeout, orange for Factory, or blue for Escape CPU."
+		return
+	end
+	if courseName ~= activeCourseName then
+		activeCourseName = courseName
+		currentObjective = 1
+		completed = {}
+	end
+	local objectiveSet = objectiveSets[courseName] or objectiveSets.WipeoutRun
+	local objectives = objectiveSet.objectives
+
 	while objectives[currentObjective] and objectives[currentObjective].done() do
 		if not completed[currentObjective] then
 			completed[currentObjective] = true
@@ -2375,7 +3902,7 @@ local function updateMission()
 	local startTime = player:GetAttribute("RunStartTime")
 	local elapsedSeconds = player:GetAttribute("RunElapsedSeconds")
 	local finishedTime = player:GetAttribute("RunTimeSeconds")
-	local bestTime = player:GetAttribute("BestRunTimeSeconds")
+	local bestTime = player:GetAttribute(objectiveSet.bestAttribute)
 	if startTime ~= runTimerSeenValue then
 		runTimerSeenValue = startTime
 		runTimerLocalStart = if typeof(startTime) == "number" then os.clock() else nil
@@ -2385,7 +3912,7 @@ local function updateMission()
 	if typeof(bestTime) == "number" then
 		timing ..= string.format(" | Best %.1fs", bestTime)
 	end
-	missionTitle.Text = "WIPEOUT RUN" .. timing
+	missionTitle.Text = objectiveSet.title .. timing
 	missionText.Text = objective and objective.text or "Run it again: beat your time and grab more coins."
 end
 
@@ -2406,6 +3933,7 @@ player:GetAttributeChangedSignal("CurrentForm"):Connect(function()
 	setActive(player:GetAttribute("CurrentForm") or SizeConfig.DefaultForm)
 end)
 player:GetAttributeChangedSignal("CourseFinished"):Connect(updateMission)
+player:GetAttributeChangedSignal("CourseName"):Connect(updateMission)
 
 workspace.ChildAdded:Connect(function(child)
 	if child.Name == "TinyGiantGraybox" then
@@ -2577,10 +4105,37 @@ Lighting.Ambient = Color3.fromRGB(80, 90, 105)
 Lighting.OutdoorAmbient = Color3.fromRGB(105, 120, 135)
 
 for _, effect in ipairs(Lighting:GetChildren()) do
-	if effect:IsA("BloomEffect") then
-		effect.Enabled = false
+	if effect:IsA("BloomEffect") or effect.Name == "WipeoutColorGrade" or effect.Name == "WipeoutSunRays" or effect.Name == "WipeoutAtmosphere" then
+		if effect:IsA("PostEffect") then
+			effect.Enabled = false
+		end
+		effect:Destroy()
 	end
 end
+
+local colorGrade = Instance.new("ColorCorrectionEffect")
+colorGrade.Name = "WipeoutColorGrade"
+colorGrade.Brightness = 0.02
+colorGrade.Contrast = 0.12
+colorGrade.Saturation = 0.08
+colorGrade.TintColor = Color3.fromRGB(245, 250, 255)
+colorGrade.Parent = Lighting
+
+local sunRays = Instance.new("SunRaysEffect")
+sunRays.Name = "WipeoutSunRays"
+sunRays.Intensity = 0.035
+sunRays.Spread = 0.45
+sunRays.Parent = Lighting
+
+local atmosphere = Instance.new("Atmosphere")
+atmosphere.Name = "WipeoutAtmosphere"
+atmosphere.Density = 0.18
+atmosphere.Offset = 0.15
+atmosphere.Color = Color3.fromRGB(198, 230, 255)
+atmosphere.Decay = Color3.fromRGB(120, 150, 180)
+atmosphere.Glare = 0.06
+atmosphere.Haze = 0.45
+atmosphere.Parent = Lighting
 
 local existing = workspace:FindFirstChild("TinyGiantGraybox")
 if existing then
@@ -2616,6 +4171,15 @@ local COLORS = {
 	Dark = Color3.fromRGB(18, 22, 34),
 	Support = Color3.fromRGB(70, 76, 86),
 	White = Color3.fromRGB(60, 125, 165),
+	FactoryFloor = Color3.fromRGB(74, 83, 92),
+	FactoryBelt = Color3.fromRGB(42, 50, 58),
+	FactoryOrange = Color3.fromRGB(255, 142, 45),
+	FactoryRed = Color3.fromRGB(220, 42, 48),
+	ComputerBlue = Color3.fromRGB(55, 165, 230),
+	ComputerGreen = Color3.fromRGB(80, 230, 150),
+	ComputerFloor = Color3.fromRGB(38, 54, 76),
+	ComputerVoid = Color3.fromRGB(38, 28, 86),
+	Firewall = Color3.fromRGB(235, 50, 65),
 }
 
 local function part(name, size, cframe, color, material)
@@ -2648,10 +4212,65 @@ local function nonSolid(p)
 	return p
 end
 
+local function addTrail(part, name, color, pos0, pos1, lifetime, width)
+	local a0 = Instance.new("Attachment")
+	a0.Name = name .. "_TrailA"
+	a0.Position = pos0
+	a0.Parent = part
+
+	local a1 = Instance.new("Attachment")
+	a1.Name = name .. "_TrailB"
+	a1.Position = pos1
+	a1.Parent = part
+
+	local trail = Instance.new("Trail")
+	trail.Name = name
+	trail.Attachment0 = a0
+	trail.Attachment1 = a1
+	trail.Color = ColorSequence.new(color)
+	trail.Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 0.18),
+		NumberSequenceKeypoint.new(1, 1),
+	})
+	trail.Lifetime = lifetime or 0.22
+	trail.LightEmission = 0.35
+	trail.WidthScale = NumberSequence.new(width or 0.55)
+	trail.Parent = part
+	return trail
+end
+
+local function addCoinSparkle(coinPart)
+	local attachment = Instance.new("Attachment")
+	attachment.Name = "CoinSparkleAttachment"
+	attachment.Parent = coinPart
+
+	local sparkle = Instance.new("ParticleEmitter")
+	sparkle.Name = "CoinSparkle"
+	sparkle.Color = ColorSequence.new(Color3.fromRGB(255, 235, 80), Color3.fromRGB(255, 255, 210))
+	sparkle.LightEmission = 0.55
+	sparkle.Lifetime = NumberRange.new(0.45, 0.9)
+	sparkle.Rate = 5
+	sparkle.Speed = NumberRange.new(0.35, 1.25)
+	sparkle.SpreadAngle = Vector2.new(180, 180)
+	sparkle.Size = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 0.13),
+		NumberSequenceKeypoint.new(1, 0),
+	})
+	sparkle.Parent = attachment
+end
+
 local function floorTile(name, z, length, color)
 	local tile = block(name, Vector3.new(46, 1, length), Vector3.new(0, 0, z), color or COLORS.Floor)
 	block(name .. "_LeftWall", Vector3.new(2.5, 8, length), Vector3.new(-24.25, 3.5, z), COLORS.Wall)
 	block(name .. "_RightWall", Vector3.new(2.5, 8, length), Vector3.new(24.25, 3.5, z), COLORS.Wall)
+	return tile
+end
+
+local function floorTileAt(name, x, z, length, width, color)
+	local w = width or 48
+	local tile = block(name, Vector3.new(w, 1, length), Vector3.new(x, 0, z), color or COLORS.Floor)
+	block(name .. "_LeftWall", Vector3.new(2.5, 8, length), Vector3.new(x - w * 0.5 - 1.25, 3.5, z), COLORS.Wall)
+	block(name .. "_RightWall", Vector3.new(2.5, 8, length), Vector3.new(x + w * 0.5 + 1.25, 3.5, z), COLORS.Wall)
 	return tile
 end
 
@@ -2663,8 +4282,63 @@ local function pit(name, z, length)
 	p:SetAttribute("SoftReset", true)
 	CollectionService:AddTag(p, "TG_Kill")
 
+	local mistAttachment = Instance.new("Attachment")
+	mistAttachment.Name = name .. "_MistAttachment"
+	mistAttachment.Position = Vector3.new(0, p.Size.Y * 0.5 + 0.08, 0)
+	mistAttachment.Parent = p
+
+	local mist = Instance.new("ParticleEmitter")
+	mist.Name = name .. "_Mist"
+	mist.Color = ColorSequence.new(Color3.fromRGB(140, 220, 255), Color3.fromRGB(235, 255, 255))
+	mist.LightEmission = 0.18
+	mist.Lifetime = NumberRange.new(1.2, 2.2)
+	mist.Rate = 7
+	mist.Speed = NumberRange.new(0.6, 1.8)
+	mist.SpreadAngle = Vector2.new(180, 18)
+	mist.Size = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 0.65),
+		NumberSequenceKeypoint.new(1, 0),
+	})
+	mist.Parent = mistAttachment
+
 	for offset = -length * 0.5 + 8, length * 0.5 - 8, 12 do
-		local wave = neon(name .. "_Wave_" .. tostring(math.floor(offset)), Vector3.new(38, 0.12, 1.2), Vector3.new(0, -3.72, z + offset), Color3.fromRGB(45, 115, 175))
+		local wave = neon(name .. "_Wave_" .. tostring(math.floor(offset)), Vector3.new(38, 0.08, 1.2), Vector3.new(0, -3.48, z + offset), Color3.fromRGB(45, 115, 175))
+		wave.Transparency = 0.5
+		nonSolid(wave)
+	end
+
+	return p
+end
+
+local function pitAt(name, x, z, length, width)
+	local p = block(name, Vector3.new(width or 58, 1.2, length), Vector3.new(x, -4.4, z), COLORS.Water, Enum.Material.SmoothPlastic)
+	p.Transparency = 0.18
+	p.CanCollide = false
+	p.CanQuery = false
+	p:SetAttribute("SoftReset", true)
+	CollectionService:AddTag(p, "TG_Kill")
+
+	local mistAttachment = Instance.new("Attachment")
+	mistAttachment.Name = name .. "_MistAttachment"
+	mistAttachment.Position = Vector3.new(0, p.Size.Y * 0.5 + 0.08, 0)
+	mistAttachment.Parent = p
+
+	local mist = Instance.new("ParticleEmitter")
+	mist.Name = name .. "_Mist"
+	mist.Color = ColorSequence.new(Color3.fromRGB(140, 220, 255), Color3.fromRGB(235, 255, 255))
+	mist.LightEmission = 0.18
+	mist.Lifetime = NumberRange.new(1.2, 2.2)
+	mist.Rate = 7
+	mist.Speed = NumberRange.new(0.6, 1.8)
+	mist.SpreadAngle = Vector2.new(180, 18)
+	mist.Size = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 0.65),
+		NumberSequenceKeypoint.new(1, 0),
+	})
+	mist.Parent = mistAttachment
+
+	for offset = -length * 0.5 + 8, length * 0.5 - 8, 12 do
+		local wave = neon(name .. "_Wave_" .. tostring(math.floor(offset)), Vector3.new((width or 58) - 16, 0.08, 1.2), Vector3.new(x, -3.48, z + offset), Color3.fromRGB(45, 115, 175))
 		wave.Transparency = 0.5
 		nonSolid(wave)
 	end
@@ -2673,9 +4347,19 @@ local function pit(name, z, length)
 end
 
 local function checkpoint(index, z)
-	local p = neon("Checkpoint_" .. index, Vector3.new(34, 0.55, 8), Vector3.new(0, 0.85, z), COLORS.Checkpoint)
+	local p = neon("Checkpoint_" .. index, Vector3.new(34, 0.55, 8), Vector3.new(0, 0.98, z), COLORS.Checkpoint)
 	p.Transparency = 0.08
 	p.CanCollide = false
+	CollectionService:AddTag(p, "TG_Checkpoint")
+	return p
+end
+
+local function checkpointAt(name, x, z, width, courseName, courseStart)
+	local p = neon(name, Vector3.new(width or 34, 0.55, 8), Vector3.new(x, 0.98, z), COLORS.Checkpoint)
+	p.Transparency = 0.08
+	p.CanCollide = false
+	p:SetAttribute("CourseName", courseName or "WipeoutRun")
+	p:SetAttribute("CourseStart", courseStart == true)
 	CollectionService:AddTag(p, "TG_Checkpoint")
 	return p
 end
@@ -2739,6 +4423,7 @@ local function coin(name, position, value)
 	weld.Part0 = p
 	weld.Part1 = marker
 	weld.Parent = marker
+	addCoinSparkle(p)
 
 	local light = Instance.new("PointLight")
 	light.Color = COLORS.Coin
@@ -2785,11 +4470,12 @@ local function sweeper(name, position, length, period, phase)
 	hub.Material = Enum.Material.Rubber
 	hub.Orientation = Vector3.new(0, 0, 0)
 
-	local cap = block(name .. "_Cap", Vector3.new(5, 0.5, 5), position + Vector3.new(0, 4.25, 0), COLORS.Trim)
+	local cap = block(name .. "_Cap", Vector3.new(5, 0.5, 5), position + Vector3.new(0, 4.45, 0), COLORS.Trim)
 	cap.Shape = Enum.PartType.Cylinder
 	cap.Material = Enum.Material.SmoothPlastic
 
 	local arm = block(name, Vector3.new(length, 1.15, 1.15), position + Vector3.new(0, 2.9, 0), COLORS.Sweeper, Enum.Material.SmoothPlastic)
+	addTrail(arm, name .. "_MotionTrail", Color3.fromRGB(255, 238, 80), Vector3.new(-length * 0.5, 0.65, 0), Vector3.new(-length * 0.5, -0.65, 0), 0.2, 0.5)
 	arm:SetAttribute("Period", period)
 	arm:SetAttribute("Phase", phase or 0)
 	arm:SetAttribute("KnockStrength", 78)
@@ -2798,7 +4484,7 @@ local function sweeper(name, position, length, period, phase)
 	return arm
 end
 
-local function punchBlock(name, startPosition, size, travelX, period, phase)
+local function punchBlock(name, startPosition, size, travelX, period, phase, showTrail)
 	local p = block(name, size, startPosition, COLORS.Punch)
 	p.CanCollide = false
 	p:SetAttribute("TravelX", travelX)
@@ -2815,6 +4501,7 @@ end
 
 local function timingBumper(name, startPosition, travelX, period, phase)
 	local p = block(name, Vector3.new(11, 5.5, 8), startPosition, Color3.fromRGB(215, 42, 48), Enum.Material.SmoothPlastic)
+	addTrail(p, name .. "_MotionTrail", Color3.fromRGB(255, 80, 80), Vector3.new(0, 2.75, -4), Vector3.new(0, -2.75, -4), 0.22, 0.7)
 	p.CanCollide = false
 	p:SetAttribute("TravelX", travelX)
 	p:SetAttribute("TravelY", 0)
@@ -2828,21 +4515,55 @@ local function timingBumper(name, startPosition, travelX, period, phase)
 	return p
 end
 
-local function conveyorZone(name, z, pushX, color)
-	local zone = neon(name, Vector3.new(9, 0.8, 16), Vector3.new(0, 2.4, z), color or Color3.fromRGB(255, 150, 60))
-	zone.Transparency = 0.32
-	zone:SetAttribute("PushX", pushX)
-	zone:SetAttribute("ForwardMin", 12)
+local function stampPress(name, centerX, z, phase)
+	local frame = block(name .. "_Frame", Vector3.new(20, 1.2, 2.2), Vector3.new(centerX, 8.5, z - 4.5), COLORS.Support, Enum.Material.Metal)
+	frame.CanCollide = false
+	local postLeft = block(name .. "_PostLeft", Vector3.new(1.2, 9, 1.2), Vector3.new(centerX - 10.5, 4.5, z), COLORS.Support, Enum.Material.Metal)
+	postLeft.CanCollide = false
+	local postRight = block(name .. "_PostRight", Vector3.new(1.2, 9, 1.2), Vector3.new(centerX + 10.5, 4.5, z), COLORS.Support, Enum.Material.Metal)
+	postRight.CanCollide = false
+
+	local p = block(name, Vector3.new(18, 2.4, 8.5), Vector3.new(centerX, 7.6, z), COLORS.FactoryOrange, Enum.Material.Metal)
+	addTrail(p, name .. "_MotionTrail", Color3.fromRGB(255, 160, 70), Vector3.new(-9, -1.2, -4), Vector3.new(9, -1.2, -4), 0.18, 0.75)
+	p.CanCollide = false
+	p:SetAttribute("TravelY", -5.6)
+	p:SetAttribute("Period", 2.8)
+	p:SetAttribute("Phase", phase or 0)
+	p:SetAttribute("KnockOnly", true)
+	p:SetAttribute("KnockStrength", 58)
+	p:SetAttribute("KnockLift", 22)
+	CollectionService:AddTag(p, "TG_Crusher")
+
+	for offsetX = -6, 6, 6 do
+		local stripe = neon(name .. "_WarningStripe_" .. tostring(offsetX), Vector3.new(3, 0.12, 0.6), Vector3.new(centerX + offsetX, 1.74, z - 7), COLORS.FactoryOrange)
+		stripe.Orientation = Vector3.new(0, 25, 0)
+		nonSolid(stripe)
+	end
+	return p
+end
+
+local function conveyorZone(name, z, pushZ, color, centerX, width, length)
+	local x = centerX or 0
+	local zone = neon(name, Vector3.new(width or 9, 0.8, length or 16), Vector3.new(x, 2.4, z), color or Color3.fromRGB(255, 150, 60))
+	zone.Transparency = 1
+	zone:SetAttribute("PushX", 0)
+	zone:SetAttribute("PushZ", math.abs(pushZ))
+	zone:SetAttribute("ForwardMin", 14)
 	CollectionService:AddTag(zone, "TG_Conveyor")
 	nonSolid(zone)
 
-	local arrowColor = if pushX > 0 then Color3.fromRGB(255, 120, 70) else Color3.fromRGB(120, 240, 255)
-	local center = neon(name .. "_ArrowBase", Vector3.new(4.8, 0.14, 0.8), Vector3.new(pushX > 0 and 1.2 or -1.2, 2.9, z), arrowColor)
-	center.Orientation = Vector3.new(0, pushX > 0 and -25 or 25, 0)
-	nonSolid(center)
-	local head = neon(name .. "_ArrowHead", Vector3.new(2.2, 0.14, 2.2), Vector3.new(pushX > 0 and 3.4 or -3.4, 2.9, z), arrowColor)
-	head.Orientation = Vector3.new(0, 45, 0)
-	nonSolid(head)
+	local arrowColor = Color3.fromRGB(255, 185, 45)
+	local laneLength = length or 16
+	for offset = -laneLength * 0.5 + 10, laneLength * 0.5 - 10, 18 do
+		local markerName = name .. "_Direction_" .. tostring(math.floor(offset))
+		local shaft = neon(markerName .. "_Shaft", Vector3.new(0.82, 0.14, 4.6), Vector3.new(x, 2.9, z + offset - 1.0), arrowColor)
+		shaft.Transparency = 0
+		nonSolid(shaft)
+		local head = neon(markerName .. "_Head", Vector3.new(2.35, 0.14, 2.35), Vector3.new(x, 2.91, z + offset + 2.2), arrowColor)
+		head.Orientation = Vector3.new(0, 45, 0)
+		head.Transparency = 0
+		nonSolid(head)
+	end
 	return zone
 end
 
@@ -2896,6 +4617,7 @@ local function swingBall(name, z, x, amplitude, period, phase)
 
 	local ball = block(name, Vector3.new(ballRadius * 2, ballRadius * 2, ballRadius * 2), pivot + Vector3.new(0, -cableLength, 0), Color3.fromRGB(210, 36, 42), Enum.Material.SmoothPlastic)
 	ball.Shape = Enum.PartType.Ball
+	addTrail(ball, name .. "_MotionTrail", Color3.fromRGB(255, 70, 70), Vector3.new(0, ballRadius * 0.85, 0), Vector3.new(0, -ballRadius * 0.85, 0), 0.28, 0.85)
 	ball:SetAttribute("PivotX", pivot.X)
 	ball:SetAttribute("PivotY", pivot.Y)
 	ball:SetAttribute("PivotZ", pivot.Z)
@@ -2907,6 +4629,31 @@ local function swingBall(name, z, x, amplitude, period, phase)
 	CollectionService:AddTag(ball, "TG_SwingBall")
 
 	return ball
+end
+
+local function swingCrate(name, z, x, amplitude, period, phase)
+	local pivot = Vector3.new(x, 23, z)
+	local cableLength = 15
+
+	local hanger = block(name .. "_Hanger", Vector3.new(4, 0.8, 4), pivot, COLORS.Support, Enum.Material.Metal)
+	hanger.CanCollide = false
+
+	local cable = block(name .. "_Cable", Vector3.new(0.35, cableLength, 0.35), pivot + Vector3.new(0, -cableLength * 0.5, 0), Color3.fromRGB(45, 45, 50), Enum.Material.Metal)
+	cable.CanCollide = false
+
+	local crate = block(name, Vector3.new(7.5, 7.5, 7.5), pivot + Vector3.new(0, -cableLength, 0), COLORS.FactoryRed, Enum.Material.Wood)
+	addTrail(crate, name .. "_MotionTrail", Color3.fromRGB(255, 90, 70), Vector3.new(0, 3.6, -3.6), Vector3.new(0, -3.6, -3.6), 0.25, 0.8)
+	crate:SetAttribute("PivotX", pivot.X)
+	crate:SetAttribute("PivotY", pivot.Y)
+	crate:SetAttribute("PivotZ", pivot.Z)
+	crate:SetAttribute("CableLength", cableLength)
+	crate:SetAttribute("Amplitude", amplitude or 32)
+	crate:SetAttribute("Period", period or 3.8)
+	crate:SetAttribute("Phase", phase or 0)
+	crate:SetAttribute("SwingAxis", "X")
+	CollectionService:AddTag(crate, "TG_SwingBall")
+
+	return crate
 end
 
 local function spawnLocation()
@@ -2969,31 +4716,392 @@ local function portal(name, position, size, color, tag)
 end
 
 local function lobbyArea()
-	block("LobbyFloor", Vector3.new(96, 1, 82), Vector3.new(0, 0, -130), COLORS.FloorAlt)
-	block("LobbyBackWall", Vector3.new(100, 9, 2.5), Vector3.new(0, 4, -171), COLORS.Wall)
-	block("LobbyLeftWall", Vector3.new(2.5, 9, 82), Vector3.new(-49, 4, -130), COLORS.Wall)
-	block("LobbyRightWall", Vector3.new(2.5, 9, 82), Vector3.new(49, 4, -130), COLORS.Wall)
+	block("LobbyFloor", Vector3.new(152, 1, 108), Vector3.new(0, 0, -136), COLORS.FloorAlt)
+	block("LobbyBackWall", Vector3.new(156, 9, 2.5), Vector3.new(0, 4, -190), COLORS.Wall)
+	block("LobbyLeftWall", Vector3.new(2.5, 9, 108), Vector3.new(-77, 4, -136), COLORS.Wall)
+	block("LobbyRightWall", Vector3.new(2.5, 9, 108), Vector3.new(77, 4, -136), COLORS.Wall)
 
-	labelBoard("LobbyTitleBoard", Vector3.new(0, 8, -170), Vector3.new(42, 10, 1), "WIPEOUT HUB", "Pick a course. Fall in water, reset fast, run again.", COLORS.Trim)
-	labelBoard("LobbyWipeoutBoard", Vector3.new(0, 8, -88), Vector3.new(32, 9, 1), "WIPEOUT RUN", "Portal opens the obstacle course.", COLORS.Trim)
-	labelBoard("LobbyFactoryBoard", Vector3.new(-31, 7, -104), Vector3.new(24, 8, 1), "FACTORY CHAOS", "Coming next.", Color3.fromRGB(160, 180, 205))
-	labelBoard("LobbyComputerBoard", Vector3.new(31, 7, -104), Vector3.new(24, 8, 1), "COMPUTER OBBY", "Next game prototype.", Color3.fromRGB(160, 180, 205))
+	labelBoard("LobbyTitleBoard", Vector3.new(0, 8, -189), Vector3.new(50, 10, 1), "WIPEOUT HUB", "Pick a course, grab a reward, then run it again.", COLORS.Trim)
 
-	portal("Portal_WipeoutRun", Vector3.new(0, 3.2, -101), Vector3.new(18, 6, 2), COLORS.Trim, "TG_StartPortal")
-	block("Portal_WipeoutRun_FrameTop", Vector3.new(22, 1, 2), Vector3.new(0, 6.5, -101), COLORS.Dark, Enum.Material.Metal)
-	block("Portal_WipeoutRun_FrameLeft", Vector3.new(1, 7, 2), Vector3.new(-11, 3.6, -101), COLORS.Dark, Enum.Material.Metal)
-	block("Portal_WipeoutRun_FrameRight", Vector3.new(1, 7, 2), Vector3.new(11, 3.6, -101), COLORS.Dark, Enum.Material.Metal)
+	local function selectorCard(name, x, title, body, color, tag)
+		labelBoard("Lobby" .. name .. "Board", Vector3.new(x, 10.5, -96), Vector3.new(25, 7, 1), title, body, color)
+		local pad
+		if tag then
+			pad = portal("Portal_" .. name, Vector3.new(x, 1.25, -123), Vector3.new(20, 0.45, 13), color, tag)
+			pad.Transparency = 0.02
+		else
+			pad = block("Portal_" .. name, Vector3.new(20, 0.45, 13), Vector3.new(x, 1.25, -123), color)
+			pad.Transparency = 0.18
+			pad.CanCollide = false
+			pad.CanTouch = false
+		end
 
-	block("PracticeJumpPad", Vector3.new(16, 1, 10), Vector3.new(-24, 1.05, -139), COLORS.Pad)
-	block("PracticeDodgeBlock", Vector3.new(9, 5, 5), Vector3.new(24, 3.5, -139), Color3.fromRGB(210, 36, 42))
-	block("PracticeWaterSample", Vector3.new(22, 1, 12), Vector3.new(0, -1.2, -116), COLORS.Water).CanCollide = false
-	coin("LobbyCoin_1", Vector3.new(-17, 4, -127), 1)
-	coin("LobbyCoin_2", Vector3.new(17, 4, -127), 1)
+		nonSolid(neon("Portal_" .. name .. "_ArrowBase", Vector3.new(8, 0.15, 1), Vector3.new(x, 1.65, -124), COLORS.Trim))
+		local tip = neon("Portal_" .. name .. "_ArrowTip", Vector3.new(4, 0.15, 4), Vector3.new(x, 1.65, -119.8), COLORS.Trim)
+		tip.Orientation = Vector3.new(0, 45, 0)
+		nonSolid(tip)
+		return pad
+	end
+
+	selectorCard("WipeoutRun", -30, "WIPEOUT RUN", "Step on the yellow floor pad.", COLORS.Trim, "TG_StartPortal")
+	selectorCard("FactoryChaos", 0, "FACTORY CHAOS", "Step on the orange floor pad.", COLORS.FactoryOrange, "TG_FactoryPortal")
+	selectorCard("ComputerObby", 30, "ESCAPE CPU", "Step on the blue floor pad.", COLORS.ComputerBlue, "TG_ComputerPortal")
+
+	local function lobbyBooth(name, x, z, color, title, body)
+		block(name .. "_Counter", Vector3.new(22, 2.2, 7), Vector3.new(x, 1.6, z), color, Enum.Material.SmoothPlastic)
+		block(name .. "_Back", Vector3.new(24, 8, 1.5), Vector3.new(x, 4.4, z + 5.5), COLORS.Dark, Enum.Material.SmoothPlastic)
+		labelBoard(name .. "_Board", Vector3.new(x, 7.4, z + 6.35), Vector3.new(22, 6, 1), title, body, color)
+	end
+
+	lobbyBooth("LobbyDailyGift", -58, -164, Color3.fromRGB(80, 180, 105), "DAILY GIFT", "Reward chest coming soon.")
+	lobbyBooth("LobbyCoinShop", 58, -164, COLORS.Trim, "COIN SHOP", "Spend coins on flair.")
+	lobbyBooth("LobbyCosmetics", -58, -112, Color3.fromRGB(170, 95, 220), "COSMETICS", "Trails and effects.")
+	lobbyBooth("LobbyWinsBoard", 58, -112, Color3.fromRGB(70, 175, 215), "WINS BOARD", "Live server rankings.")
+
+	local giftPad = portal("LobbyDailyGiftPad", Vector3.new(-58, 1.25, -151), Vector3.new(20, 0.45, 8), Color3.fromRGB(80, 220, 110), "TG_DailyGiftPad")
+	giftPad.Transparency = 0.03
+	giftPad:SetAttribute("RewardCoins", 25)
+
+	local goldTrailPad = portal("LobbyGoldTrailPad", Vector3.new(52, 1.25, -151), Vector3.new(13, 0.45, 8), COLORS.Trim, "TG_CosmeticShopPad")
+	goldTrailPad.Transparency = 0.03
+	goldTrailPad:SetAttribute("Cost", 25)
+	goldTrailPad:SetAttribute("CosmeticName", "Gold Trail")
+	goldTrailPad:SetAttribute("TrailColor", COLORS.Trim)
+
+	local neonTrailPad = portal("LobbyNeonTrailPad", Vector3.new(64, 1.25, -151), Vector3.new(13, 0.45, 8), Color3.fromRGB(170, 95, 255), "TG_CosmeticShopPad")
+	neonTrailPad.Transparency = 0.03
+	neonTrailPad:SetAttribute("Cost", 50)
+	neonTrailPad:SetAttribute("CosmeticName", "Neon Trail")
+	neonTrailPad:SetAttribute("TrailColor", Color3.fromRGB(170, 95, 255))
+
+	labelBoard("LobbyGiftHint", Vector3.new(-58, 5.2, -148), Vector3.new(18, 4.4, 1), "CLAIM", "+25 coins", Color3.fromRGB(80, 220, 110))
+	labelBoard("LobbyGoldTrailHint", Vector3.new(52, 5.2, -148), Vector3.new(13, 4.4, 1), "GOLD", "25 coins", COLORS.Trim)
+	labelBoard("LobbyNeonTrailHint", Vector3.new(64, 5.2, -148), Vector3.new(13, 4.4, 1), "NEON", "50 coins", Color3.fromRGB(170, 95, 255))
+
+	for _, spec in ipairs({
+		{"ShopCoinDisplay_1", Vector3.new(53, 3.55, -165.2), Vector3.new(2.0, 1.7, 0.8), COLORS.Coin},
+		{"ShopCoinDisplay_2", Vector3.new(63, 3.55, -165.2), Vector3.new(2.0, 1.7, 0.8), COLORS.Coin},
+		{"CosmeticTrailSample", Vector3.new(-58, 3.5, -112), Vector3.new(10, 0.35, 1.2), Color3.fromRGB(170, 95, 220)},
+		{"WinsTrophyBase", Vector3.new(58, 3.45, -112), Vector3.new(3, 1.5, 3), COLORS.Trim},
+	}) do
+		local prop = block(spec[1], spec[3], spec[2], spec[4], Enum.Material.SmoothPlastic)
+		prop.CanCollide = false
+	end
+
+	coin("LobbyCoin_1", Vector3.new(-9, 4, -150), 1)
+	coin("LobbyCoin_2", Vector3.new(9, 4, -150), 1)
+	coin("LobbyCoin_3", Vector3.new(0, 4, -112), 1)
 end
 
 -- Start zone.
 lobbyArea()
 spawnLocation()
+
+local function computerEscapeCourse()
+	local x = 112
+	local coinIndex = 1
+	local function cpuCoin(cx, cy, cz, value)
+		coin("ComputerCoin_" .. coinIndex, Vector3.new(cx, cy, cz), value)
+		coinIndex += 1
+	end
+	local function staticPit(name, z, length)
+		local p = pitAt(name, x, z, length, 64)
+		p.Color = COLORS.ComputerVoid
+		for _, child in ipairs(course:GetChildren()) do
+			if child.Name:find(name .. "_Wave_") == 1 and child:IsA("BasePart") then
+				child.Color = COLORS.ComputerBlue
+				child.Transparency = 0.42
+			end
+		end
+		return p
+	end
+	local function trace(name, localX, z, length, color)
+		local line = neon(name, Vector3.new(1.1, 0.1, length), Vector3.new(x + localX, 2.05, z), color)
+		line.Transparency = 0.14
+		nonSolid(line)
+		return line
+	end
+	local function chip(name, localX, z, color)
+		local base = block(name, Vector3.new(12, 2, 9), Vector3.new(x + localX, 2.1, z), color or COLORS.Dark, Enum.Material.Metal)
+		base.CanCollide = false
+		for pin = -4, 4, 2 do
+			block(name .. "_PinL_" .. tostring(pin), Vector3.new(1, 0.25, 0.45), Vector3.new(x + localX - 6.7, 2.85, z + pin), COLORS.Support, Enum.Material.Metal).CanCollide = false
+			block(name .. "_PinR_" .. tostring(pin), Vector3.new(1, 0.25, 0.45), Vector3.new(x + localX + 6.7, 2.85, z + pin), COLORS.Support, Enum.Material.Metal).CanCollide = false
+		end
+	end
+	local function ceilingPanel(name, z, length)
+		local roof = block(name, Vector3.new(68, 1.2, length), Vector3.new(x, 29, z), COLORS.Dark, Enum.Material.Metal)
+		roof.CanCollide = false
+		roof.CastShadow = false
+		for _, side in ipairs({-34.6, 34.6}) do
+			local fascia = block(name .. "_SideWall_" .. tostring(side), Vector3.new(1.2, 21, length), Vector3.new(x + side, 18.2, z), COLORS.Wall, Enum.Material.Metal)
+			fascia.CanCollide = false
+			fascia.CastShadow = false
+		end
+		for offset = -24, 24, 16 do
+			local strip = neon(name .. "_Light_" .. tostring(offset), Vector3.new(1.2, 0.12, length - 10), Vector3.new(x + offset, 28.28, z), COLORS.ComputerBlue)
+			strip.Transparency = 0.08
+			nonSolid(strip)
+		end
+		return roof
+	end
+
+	ceilingPanel("ComputerRoof_Start", -12, 70)
+	ceilingPanel("ComputerRoof_DataBus", 68, 90)
+	ceilingPanel("ComputerRoof_Firewall", 174, 112)
+	ceilingPanel("ComputerRoof_Fans", 292, 112)
+	ceilingPanel("ComputerRoof_Cache", 414, 116)
+
+	floorTileAt("Computer_StartDeck", x, -35, 44, 52, COLORS.ComputerFloor)
+	checkpointAt("ComputerCheckpoint_1", x, -50, 36, "ComputerObby", true)
+	local startPad = neon("ComputerStartPad", Vector3.new(26, 0.4, 8), Vector3.new(x, 1.05, -20), COLORS.ComputerBlue)
+	startPad:SetAttribute("StartsRun", true)
+	startPad:SetAttribute("CourseName", "ComputerObby")
+	nonSolid(startPad)
+	labelBoard("ComputerIntroBoard", Vector3.new(x, 8, -66), Vector3.new(38, 9, 1), "ESCAPE CPU", "Cross data buses, firewalls, fan blades, and cache gaps.", COLORS.ComputerBlue)
+	trace("ComputerStartTrace_1", -8, -20, 28, COLORS.ComputerGreen)
+	trace("ComputerStartTrace_2", 8, -20, 28, COLORS.ComputerBlue)
+	chip("ComputerStartChip_Left", -24, -24, COLORS.Dark)
+	chip("ComputerStartChip_Right", 24, -8, COLORS.Dark)
+
+	-- Zone 1: readable conveyor data buses. Wide lanes and soft-reset static below.
+	staticPit("ComputerBus_StaticPit", 40, 116)
+	block("ComputerBus_LeftWall", Vector3.new(2.5, 8, 124), Vector3.new(x - 32.25, 3.5, 40), COLORS.Wall)
+	block("ComputerBus_RightWall", Vector3.new(2.5, 8, 124), Vector3.new(x + 32.25, 3.5, 40), COLORS.Wall)
+	for _, lane in ipairs({
+		{-16, COLORS.ComputerGreen, 13},
+		{0, COLORS.ComputerBlue, -12},
+		{16, COLORS.ComputerGreen, 13},
+	}) do
+		block("ComputerBus_Bridge_" .. tostring(lane[1]), Vector3.new(12, 1.15, 100), Vector3.new(x + lane[1], 1.05, 40), COLORS.ComputerFloor, Enum.Material.Metal)
+		conveyorZone("ComputerBus_Stream_" .. tostring(lane[1]), 40, lane[3], lane[2], x + lane[1], 10, 90)
+	end
+	punchBlock("ComputerBus_Packet_1", Vector3.new(x - 27, 3.6, 22), Vector3.new(8, 4.2, 6), 42, 6.0, 0.4, false)
+	punchBlock("ComputerBus_Packet_2", Vector3.new(x + 27, 3.6, 62), Vector3.new(8, 4.2, 6), -42, 5.8, 1.8, false)
+	for _, z in ipairs({-4, 14, 32, 50, 68, 86}) do
+		cpuCoin(x, 4.4, z, 1)
+	end
+	floorTileAt("ComputerBus_ExitDeck", x, 112, 24, 52, COLORS.ComputerFloor)
+	checkpointAt("ComputerCheckpoint_2", x, 108, 36, "ComputerObby", false)
+
+	-- Zone 2: firewall shutters. They knock players into the static, never instant-kill.
+	staticPit("ComputerFirewall_StaticPit", 176, 104)
+	block("ComputerFirewall_Runway", Vector3.new(34, 1.15, 96), Vector3.new(x, 1.05, 176), COLORS.Pad, Enum.Material.Metal)
+	block("ComputerFirewall_LeftWall", Vector3.new(2.5, 8, 108), Vector3.new(x - 32.25, 3.5, 176), COLORS.Wall)
+	block("ComputerFirewall_RightWall", Vector3.new(2.5, 8, 108), Vector3.new(x + 32.25, 3.5, 176), COLORS.Wall)
+	for _, spec in ipairs({
+		{142, -28, 56, 5.4, 0.0},
+		{170, 28, -56, 5.1, 1.4},
+		{198, -28, 56, 4.9, 2.6},
+	}) do
+		local shutter = punchBlock("ComputerFirewall_Shutter_" .. tostring(spec[1]), Vector3.new(x + spec[2], 4.1, spec[1]), Vector3.new(12, 6, 9), spec[3], spec[4], spec[5], false)
+		shutter.Color = COLORS.Firewall
+		shutter:SetAttribute("KnockStrength", 60)
+		shutter:SetAttribute("KnockLift", 18)
+		trace("ComputerFirewall_Warning_" .. tostring(spec[1]), 0, spec[1] - 8, 1.5, COLORS.Firewall).Size = Vector3.new(30, 0.13, 1.5)
+	end
+	for _, z in ipairs({136, 154, 180, 206, 220}) do
+		cpuCoin(x + (z % 2 == 0 and 8 or -8), 4.5, z, 1)
+	end
+	floorTileAt("ComputerFirewall_ExitDeck", x, 238, 24, 52, COLORS.ComputerFloor)
+	checkpointAt("ComputerCheckpoint_3", x, 232, 36, "ComputerObby", false)
+
+	-- Zone 3: cooling fans. Slow sweepers make timing clear and push players into the reset field.
+	staticPit("ComputerFans_StaticPit", 294, 104)
+	block("ComputerFans_Bridge", Vector3.new(34, 1.2, 96), Vector3.new(x, 1.05, 294), COLORS.ComputerFloor, Enum.Material.Metal)
+	block("ComputerFans_LeftWall", Vector3.new(2.5, 8, 112), Vector3.new(x - 32.25, 3.5, 294), COLORS.Wall)
+	block("ComputerFans_RightWall", Vector3.new(2.5, 8, 112), Vector3.new(x + 32.25, 3.5, 294), COLORS.Wall)
+	for _, spec in ipairs({
+		{266, 0.2},
+		{296, 1.3},
+		{326, 2.4},
+	}) do
+		local fan = sweeper("ComputerFanBlade_" .. tostring(spec[1]), Vector3.new(x, 2.05, spec[1]), 54, 4.6, spec[2])
+		fan.Color = COLORS.ComputerBlue
+		fan:SetAttribute("KnockOnly", true)
+		fan:SetAttribute("KnockStrength", 52)
+		fan:SetAttribute("KnockLift", 18)
+		cpuCoin(x, 4.8, spec[1] - 7, 2)
+	end
+	floorTileAt("ComputerFans_ExitDeck", x, 352, 28, 52, COLORS.ComputerFloor)
+	checkpointAt("ComputerCheckpoint_4", x, 348, 36, "ComputerObby", false)
+
+	-- Zone 4: cache gaps and swinging corrupt blocks. Continuous side walls prevent bypassing.
+	staticPit("ComputerCache_StaticPit", 412, 110)
+	block("ComputerCache_LeftWall", Vector3.new(2.5, 8, 116), Vector3.new(x - 32.25, 3.5, 412), COLORS.Wall)
+	block("ComputerCache_RightWall", Vector3.new(2.5, 8, 116), Vector3.new(x + 32.25, 3.5, 412), COLORS.Wall)
+	for _, spec in ipairs({
+		{-10, 376, COLORS.ComputerGreen},
+		{10, 398, COLORS.ComputerBlue},
+		{-8, 420, COLORS.ComputerGreen},
+		{8, 442, COLORS.ComputerBlue},
+	}) do
+		block("ComputerCache_Pad_" .. tostring(spec[2]), Vector3.new(24, 1.2, 18), Vector3.new(x + spec[1], 1.05, spec[2]), spec[3], Enum.Material.Metal)
+		cpuCoin(x + spec[1], 4.6, spec[2], 2)
+	end
+	local rail = part("ComputerCache_OverheadBus", Vector3.new(2.2, 110, 2.2), CFrame.new(x, 23, 412) * CFrame.Angles(math.rad(90), 0, 0), COLORS.Support, Enum.Material.Metal)
+	rail.Shape = Enum.PartType.Cylinder
+	rail.CanCollide = false
+	swingCrate("ComputerCorruptBlock_1", 392, x, 24, 4.5, 0.2)
+	swingCrate("ComputerCorruptBlock_2", 432, x, 28, 4.1, 1.8)
+
+	floorTileAt("ComputerFinishDeck", x, 480, 44, 52, COLORS.ComputerFloor)
+	local finish = neon("ComputerFinishGate", Vector3.new(26, 1, 10), Vector3.new(x, 1.12, 462), COLORS.ComputerBlue)
+	finish.CanCollide = false
+	finish:SetAttribute("CourseName", "ComputerObby")
+	CollectionService:AddTag(finish, "TG_Finish")
+	block("ComputerFinishArch_Left", Vector3.new(2, 9, 2), Vector3.new(x - 15, 4.5, 462), COLORS.ComputerBlue, Enum.Material.Metal)
+	block("ComputerFinishArch_Right", Vector3.new(2, 9, 2), Vector3.new(x + 15, 4.5, 462), COLORS.ComputerBlue, Enum.Material.Metal)
+	block("ComputerFinishArch_Top", Vector3.new(32, 2, 2), Vector3.new(x, 9, 462), COLORS.ComputerBlue, Enum.Material.Metal)
+	labelBoard("ComputerFinishBoard", Vector3.new(x, 7.5, 492), Vector3.new(36, 8, 1), "CPU ESCAPED!", "Replay Escape CPU or return to the hub.", COLORS.ComputerBlue)
+	local replay = portal("ReplayComputerPad", Vector3.new(x - 13, 1.25, 506), Vector3.new(18, 0.45, 10), COLORS.ComputerBlue, "TG_ComputerPortal")
+	replay.Transparency = 0.02
+	local home = portal("ComputerReturnToLobbyPad", Vector3.new(x + 13, 1.25, 506), Vector3.new(18, 0.45, 10), COLORS.Checkpoint, "TG_LobbyReturn")
+	home.Transparency = 0.02
+	labelBoard("ReplayComputerBoard", Vector3.new(x - 13, 7, 516), Vector3.new(20, 7, 1), "ESCAPE AGAIN", "Step on blue.", COLORS.ComputerBlue)
+	labelBoard("ComputerHubBoard", Vector3.new(x + 13, 7, 516), Vector3.new(20, 7, 1), "HUB", "Step on green.", COLORS.Checkpoint)
+end
+
+computerEscapeCourse()
+
+local function factoryChaosCourse()
+	local x = -112
+	local coinIndex = 1
+	local function factoryCoin(cx, cy, cz, value)
+		coin("FactoryCoin_" .. coinIndex, Vector3.new(cx, cy, cz), value)
+		coinIndex += 1
+	end
+	local function factoryCeilingPanel(name, z, length)
+		local roof = block(name, Vector3.new(68, 1.2, length), Vector3.new(x, 29, z), COLORS.Dark, Enum.Material.Metal)
+		roof.CanCollide = false
+		roof.CastShadow = false
+		for _, side in ipairs({-34.6, 34.6}) do
+			local fascia = block(name .. "_SideWall_" .. tostring(side), Vector3.new(1.2, 21, length), Vector3.new(x + side, 18.2, z), COLORS.Wall, Enum.Material.Metal)
+			fascia.CanCollide = false
+			fascia.CastShadow = false
+		end
+		for offset = -24, 24, 16 do
+			local strip = neon(name .. "_Light_" .. tostring(offset), Vector3.new(1.2, 0.12, length - 10), Vector3.new(x + offset, 28.28, z), COLORS.FactoryOrange)
+			strip.Transparency = 0.08
+			nonSolid(strip)
+		end
+		for zOffset = -length * 0.5 + 12, length * 0.5 - 12, 24 do
+			local beam = block(name .. "_CrossBeam_" .. tostring(math.floor(zOffset)), Vector3.new(62, 0.7, 1.2), Vector3.new(x, 27.6, z + zOffset), COLORS.Support, Enum.Material.Metal)
+			beam.CanCollide = false
+			beam.CastShadow = false
+		end
+		return roof
+	end
+
+	factoryCeilingPanel("FactoryRoof_Start", -12, 70)
+	factoryCeilingPanel("FactoryRoof_Conveyors", 68, 90)
+	factoryCeilingPanel("FactoryRoof_Presses", 176, 112)
+	factoryCeilingPanel("FactoryRoof_Gears", 294, 112)
+	factoryCeilingPanel("FactoryRoof_Crates", 414, 116)
+
+	floorTileAt("Factory_StartDeck", x, -35, 44, 52, COLORS.FactoryFloor)
+	local factoryStart = checkpointAt("FactoryCheckpoint_1", x, -50, 36, "FactoryChaos", true)
+	factoryStart.CFrame = CFrame.lookAt(factoryStart.Position, factoryStart.Position + Vector3.new(0, 0, 1))
+	local startPad = neon("FactoryStartPad", Vector3.new(26, 0.4, 8), Vector3.new(x, 1.05, -20), COLORS.FactoryOrange)
+	startPad:SetAttribute("StartsRun", true)
+	startPad:SetAttribute("CourseName", "FactoryChaos")
+	nonSolid(startPad)
+	arrow("FactoryStart", -26, COLORS.FactoryOrange)
+	for _, partName in ipairs({"FactoryStart_ArrowBase", "FactoryStart_ArrowLeft", "FactoryStart_ArrowRight"}) do
+		local marker = course:FindFirstChild(partName)
+		if marker then
+			marker.Position += Vector3.new(x, 0, 0)
+		end
+	end
+	labelBoard("FactoryIntroBoard", Vector3.new(x, 8, -66), Vector3.new(36, 9, 1), "FACTORY CHAOS", "Ride belts, dodge stampers, cross gears, survive the crates.", COLORS.FactoryOrange)
+
+	-- Section 1: three conveyor lanes over water. Players can choose a lane but cannot bypass the water trough.
+	pitAt("FactoryConveyors_ResetPit", x, 40, 118, 62)
+	block("FactoryConveyors_LeftWall", Vector3.new(2.5, 8, 128), Vector3.new(x - 31.25, 3.5, 40), COLORS.Wall)
+	block("FactoryConveyors_RightWall", Vector3.new(2.5, 8, 128), Vector3.new(x + 31.25, 3.5, 40), COLORS.Wall)
+	for _, lane in ipairs({
+		{-16, Color3.fromRGB(62, 78, 90), -18},
+		{0, Color3.fromRGB(56, 62, 70), 16},
+		{16, Color3.fromRGB(62, 78, 90), -16},
+	}) do
+		block("FactoryConveyor_Belt_" .. tostring(lane[1]), Vector3.new(12, 1.1, 104), Vector3.new(x + lane[1], 1.05, 40), COLORS.FactoryBelt, Enum.Material.Metal)
+		conveyorZone("FactoryConveyor_Zone_" .. tostring(lane[1]), 40, lane[3], lane[2], x + lane[1], 11, 96)
+	end
+	punchBlock("FactoryConveyor_CratePusher_1", Vector3.new(x - 28, 3.7, 18), Vector3.new(9, 4.4, 6), 44, 6.0, 0.2)
+	punchBlock("FactoryConveyor_CratePusher_2", Vector3.new(x + 28, 3.7, 48), Vector3.new(9, 4.4, 6), -44, 5.8, 1.3)
+	punchBlock("FactoryConveyor_CratePusher_3", Vector3.new(x - 28, 3.7, 78), Vector3.new(9, 4.4, 6), 44, 5.6, 2.1)
+	for _, z in ipairs({-8, 10, 28, 46, 64, 82}) do
+		factoryCoin(x, 4.4, z, 1)
+	end
+	floorTileAt("Factory_ConveyorExit", x, 112, 22, 52, COLORS.FactoryFloor)
+	checkpointAt("FactoryCheckpoint_2", x, 108, 36, "FactoryChaos", false)
+
+	-- Section 2: stamp presses. The wide runway has water gutters, so mistakes knock players off instead of killing them.
+	pitAt("FactoryPresses_ResetPit", x, 176, 104, 64)
+	block("FactoryPresses_Runway", Vector3.new(32, 1.15, 96), Vector3.new(x, 1.05, 176), COLORS.Pad, Enum.Material.Metal)
+	block("FactoryPresses_LeftWall", Vector3.new(2.5, 8, 108), Vector3.new(x - 32.25, 3.5, 176), COLORS.Wall)
+	block("FactoryPresses_RightWall", Vector3.new(2.5, 8, 108), Vector3.new(x + 32.25, 3.5, 176), COLORS.Wall)
+	stampPress("FactoryStampPress_1", x, 142, 0.0)
+	stampPress("FactoryStampPress_2", x, 174, 1.1)
+	stampPress("FactoryStampPress_3", x, 206, 2.2)
+	for _, z in ipairs({136, 152, 168, 184, 200, 216}) do
+		factoryCoin(x + (z % 2 == 0 and -8 or 8), 4.6, z, 1)
+	end
+	floorTileAt("Factory_PressExit", x, 238, 24, 52, COLORS.FactoryFloor)
+	checkpointAt("FactoryCheckpoint_3", x, 232, 36, "FactoryChaos", false)
+
+	-- Section 3: gear tables with sweepers. Platforms are broad, but the moving arms force timing.
+	pitAt("FactoryGears_ResetPit", x, 294, 104, 64)
+	block("FactoryGears_LeftWall", Vector3.new(2.5, 8, 112), Vector3.new(x - 32.25, 3.5, 294), COLORS.Wall)
+	block("FactoryGears_RightWall", Vector3.new(2.5, 8, 112), Vector3.new(x + 32.25, 3.5, 294), COLORS.Wall)
+	for _, spec in ipairs({
+		{x - 12, 264, 0.0},
+		{x + 12, 294, 1.1},
+		{x - 10, 324, 2.0},
+	}) do
+		local gear = block("FactoryGearTable_" .. tostring(spec[2]), Vector3.new(26, 1.2, 24), Vector3.new(spec[1], 1.05, spec[2]), Color3.fromRGB(84, 122, 94), Enum.Material.Metal)
+		for tooth = -10, 10, 5 do
+			block("FactoryGearTooth_" .. tostring(spec[2]) .. "_" .. tostring(tooth), Vector3.new(3.5, 0.5, 2.2), Vector3.new(spec[1] + tooth, 1.95, spec[2] - 11.8), COLORS.FactoryOrange, Enum.Material.Metal)
+		end
+		sweeper("FactoryGearSweeper_" .. tostring(spec[2]), Vector3.new(spec[1], 2.05, spec[2]), 30, 4.1, spec[3])
+		factoryCoin(spec[1], 4.8, spec[2] - 4, 2)
+	end
+	floorTileAt("Factory_GearExit", x, 352, 28, 52, COLORS.FactoryFloor)
+	checkpointAt("FactoryCheckpoint_4", x, 348, 36, "FactoryChaos", false)
+
+	-- Section 4: swinging toy crates over water, ending in a separate finish gate.
+	pitAt("FactoryCrates_ResetPit", x, 412, 106, 64)
+	block("FactoryCrates_Bridge", Vector3.new(34, 1.2, 96), Vector3.new(x, 1.05, 412), COLORS.Pad, Enum.Material.Metal)
+	block("FactoryCrates_LeftWall", Vector3.new(2.5, 8, 112), Vector3.new(x - 32.25, 3.5, 412), COLORS.Wall)
+	block("FactoryCrates_RightWall", Vector3.new(2.5, 8, 112), Vector3.new(x + 32.25, 3.5, 412), COLORS.Wall)
+	local factoryRail = part("FactoryCrates_OverheadRail", Vector3.new(2.4, 112, 2.4), CFrame.new(x, 23, 412) * CFrame.Angles(math.rad(90), 0, 0), COLORS.Support, Enum.Material.Metal)
+	factoryRail.Shape = Enum.PartType.Cylinder
+	factoryRail.CanCollide = false
+	swingCrate("FactorySwingCrate_1", 382, x, 28, 4.4, 0.0)
+	swingCrate("FactorySwingCrate_2", 408, x, 32, 4.0, 1.2)
+	swingCrate("FactorySwingCrate_3", 434, x, 30, 3.8, 2.4)
+	for _, z in ipairs({372, 392, 414, 436}) do
+		factoryCoin(x + 9, 4.4, z, 2)
+	end
+
+	floorTileAt("FactoryFinishDeck", x, 480, 44, 52, COLORS.FactoryFloor)
+	local finish = neon("FactoryFinishGate", Vector3.new(26, 1, 10), Vector3.new(x, 1, 462), COLORS.FactoryOrange)
+	finish.CanCollide = false
+	finish:SetAttribute("CourseName", "FactoryChaos")
+	CollectionService:AddTag(finish, "TG_Finish")
+	block("FactoryFinishArch_Left", Vector3.new(2, 9, 2), Vector3.new(x - 15, 4.5, 462), COLORS.FactoryOrange, Enum.Material.Metal)
+	block("FactoryFinishArch_Right", Vector3.new(2, 9, 2), Vector3.new(x + 15, 4.5, 462), COLORS.FactoryOrange, Enum.Material.Metal)
+	block("FactoryFinishArch_Top", Vector3.new(32, 2, 2), Vector3.new(x, 9, 462), COLORS.FactoryOrange, Enum.Material.Metal)
+	labelBoard("FactoryFinishBoard", Vector3.new(x, 7.5, 492), Vector3.new(36, 8, 1), "SHIFT COMPLETE!", "Replay Factory Chaos or return to the hub.", COLORS.FactoryOrange)
+	local replay = portal("ReplayFactoryPad", Vector3.new(x - 13, 1.25, 506), Vector3.new(18, 0.45, 10), COLORS.FactoryOrange, "TG_FactoryPortal")
+	replay.Transparency = 0.02
+	local home = portal("FactoryReturnToLobbyPad", Vector3.new(x + 13, 1.25, 506), Vector3.new(18, 0.45, 10), COLORS.Checkpoint, "TG_LobbyReturn")
+	home.Transparency = 0.02
+	labelBoard("ReplayFactoryBoard", Vector3.new(x - 13, 7, 516), Vector3.new(20, 7, 1), "RUN FACTORY", "Step on orange.", COLORS.FactoryOrange)
+	labelBoard("FactoryHubBoard", Vector3.new(x + 13, 7, 516), Vector3.new(20, 7, 1), "HUB", "Step on green.", COLORS.Checkpoint)
+end
+
+factoryChaosCourse()
 floorTile("StartDeck", -32, 50, COLORS.Floor)
 checkpoint(1, -48)
 arrow("Start", -22, COLORS.Trim)
@@ -3043,6 +5151,7 @@ sweeper("FinalSweeper_2", Vector3.new(0, 2.05, 302), 46, 2.7, 1.1)
 
 -- Rest deck before the added courses.
 floorTile("RestDeck_AfterSpinner", 342, 42, COLORS.FloorAlt)
+floorTile("FinalToTiltConnector", 350, 48, COLORS.FloorAlt)
 
 -- Added course 1: tilting tables over water. Slow, visible movement with safe water resets.
 floorTile("TiltTables_EntryDeck", 374, 18, COLORS.Floor)
@@ -3050,9 +5159,9 @@ checkpoint(6, 368)
 pit("TiltTables_ResetPit", 422, 82)
 block("TiltTables_LeftWall", Vector3.new(2.5, 8, 90), Vector3.new(-24.25, 3.5, 422), COLORS.Wall)
 block("TiltTables_RightWall", Vector3.new(2.5, 8, 90), Vector3.new(24.25, 3.5, 422), COLORS.Wall)
-tiltTable("TiltTable_1", Vector3.new(0, 1.2, 394), Vector3.new(36, 1.2, 18), 6, 4.8, 0, "Z")
-tiltTable("TiltTable_2", Vector3.new(0, 1.2, 414), Vector3.new(34, 1.2, 18), 8, 4.4, 1.1, "X")
-tiltTable("TiltTable_3", Vector3.new(0, 1.2, 434), Vector3.new(32, 1.2, 18), 9, 4.1, 2.2, "Z")
+tiltTable("TiltTable_1", Vector3.new(0, 1.2, 394), Vector3.new(40, 1.2, 20), 4, 5.6, 0, "Z")
+tiltTable("TiltTable_2", Vector3.new(0, 1.2, 414), Vector3.new(40, 1.2, 20), 5, 5.4, 1.1, "X")
+tiltTable("TiltTable_3", Vector3.new(0, 1.2, 434), Vector3.new(40, 1.2, 20), 6, 5.2, 2.2, "Z")
 floorTile("TiltTables_ExitDeck", 469, 48, COLORS.FloorAlt)
 
 -- Added course 2: launch-pad lagoon. Orange ramps send players across clear water gaps.
@@ -3061,12 +5170,12 @@ checkpoint(7, 496)
 pit("LaunchLagoon_ResetPit", 576, 142)
 block("LaunchLagoon_LeftWall", Vector3.new(2.5, 8, 148), Vector3.new(-24.25, 3.5, 576), COLORS.Wall)
 block("LaunchLagoon_RightWall", Vector3.new(2.5, 8, 148), Vector3.new(24.25, 3.5, 576), COLORS.Wall)
-launchStation("LaunchLagoon_Jump_1", 520, 0, 36, 84)
-islandPad("LaunchLagoon_Landing_1", Vector3.new(0, 1.05, 552), Vector3.new(42, 1.2, 34))
+launchStation("LaunchLagoon_Jump_1", 520, 0, 34, 70)
+islandPad("LaunchLagoon_Landing_1", Vector3.new(0, 1.05, 552), Vector3.new(48, 1.2, 42))
 timingBumper("LaunchLagoon_TimingBumper_1", Vector3.new(-18, 4.15, 552), 36, 2.9, 0)
-launchStation("LaunchLagoon_Jump_2", 582, 0, 36, 84)
-islandPad("LaunchLagoon_Landing_2", Vector3.new(0, 1.05, 617), Vector3.new(42, 1.2, 34))
-timingBumper("LaunchLagoon_TimingBumper_2", Vector3.new(18, 4.15, 617), -36, 2.6, 1.2)
+launchStation("LaunchLagoon_Jump_2", 582, 0, 34, 70)
+islandPad("LaunchLagoon_Landing_2", Vector3.new(0, 1.05, 612), Vector3.new(48, 1.2, 42))
+timingBumper("LaunchLagoon_TimingBumper_2", Vector3.new(18, 4.15, 612), -36, 2.6, 1.2)
 floorTile("LaunchLagoon_ExitDeck", 650, 30, COLORS.FloorAlt)
 
 -- Added course 3: swinging red balls over water. Hits knock players off; water resets.
@@ -3074,7 +5183,7 @@ checkpoint(8, 626)
 pit("SwingBalls_ResetPit", 686, 116)
 block("SwingBalls_LeftWall", Vector3.new(2.5, 8, 122), Vector3.new(-24.25, 3.5, 686), COLORS.Wall)
 block("SwingBalls_RightWall", Vector3.new(2.5, 8, 122), Vector3.new(24.25, 3.5, 686), COLORS.Wall)
-block("SwingBalls_Bridge", Vector3.new(30, 1.2, 108), Vector3.new(0, 1.05, 690), COLORS.Pad)
+block("SwingBalls_Bridge", Vector3.new(38, 1.2, 108), Vector3.new(0, 1.05, 690), COLORS.Pad)
 local swingTube = part("SwingBalls_OverheadTube", Vector3.new(2.6, 116, 2.6), CFrame.new(0, 25, 686) * CFrame.Angles(math.rad(90), 0, 0), COLORS.Support, Enum.Material.Metal)
 swingTube.Shape = Enum.PartType.Cylinder
 swingTube.CanCollide = false
@@ -3141,4 +5250,154 @@ end
 print("Built Wipeout Run with wider multiplayer lanes, split-lane tilting tables, launch-pad lagoon, swinging red balls, checkpoints, soft-reset water, knock hazards, and coins.")
 
 
+-- Populate marketplace prop dressing.
+-- Marketplace prop pass: imports free Creator Store props and places non-blocking set dressing.
+-- Paste into Roblox Studio Command Bar after the course is built.
+
+local InsertService = game:GetService("InsertService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Workspace = game:GetService("Workspace")
+
+local ASSETS = {
+	FactoryCrate = { id = 51896886, name = "Factory Crate" },
+	GiftBox = { id = 5141889759, name = "Gift Box" },
+	ServerRack = { id = 150383271, name = "Basic Computer Server Rack" },
+	ComputerMonitor = { id = 15287400519, name = "Computer Monitor" },
+	SafetyBuoy = { id = 123021780, name = "Safety Buoy" },
+}
+
+local sources = ReplicatedStorage:FindFirstChild("MarketplacePropSources") or Instance.new("Folder")
+sources.Name = "MarketplacePropSources"
+sources.Parent = ReplicatedStorage
+
+local placed = Workspace:FindFirstChild("MarketplaceProps") or Instance.new("Folder")
+placed.Name = "MarketplaceProps"
+placed.Parent = Workspace
+placed:ClearAllChildren()
+
+local function stripScripts(root)
+	for _, descendant in ipairs(root:GetDescendants()) do
+		if descendant:IsA("LuaSourceContainer") then
+			descendant:Destroy()
+		end
+	end
+end
+
+local function prepareVisual(root)
+	stripScripts(root)
+	for _, descendant in ipairs(root:GetDescendants()) do
+		if descendant:IsA("BasePart") then
+			descendant.Anchored = true
+			descendant.CanCollide = false
+			descendant.CanTouch = false
+			descendant.CanQuery = false
+		end
+	end
+	if root:IsA("BasePart") then
+		root.Anchored = true
+		root.CanCollide = false
+		root.CanTouch = false
+		root.CanQuery = false
+	end
+end
+
+local function getSource(key)
+	local spec = ASSETS[key]
+	local existing = sources:FindFirstChild(spec.name) or sources:FindFirstChild(key)
+	if existing then
+		prepareVisual(existing)
+		return existing
+	end
+
+	local ok, model = pcall(function()
+		return InsertService:LoadAsset(spec.id)
+	end)
+	if not ok or not model then
+		warn("[MarketplaceProps] Could not load " .. spec.name .. " (" .. tostring(spec.id) .. ")")
+		return nil
+	end
+
+	local asset = model:FindFirstChildWhichIsA("Model") or model:FindFirstChildWhichIsA("BasePart")
+	if not asset then
+		model:Destroy()
+		warn("[MarketplaceProps] No model/part found in " .. spec.name)
+		return nil
+	end
+
+	asset.Name = spec.name
+	asset.Parent = sources
+	model:Destroy()
+	prepareVisual(asset)
+	return asset
+end
+
+local function modelBounds(instance)
+	if instance:IsA("Model") then
+		return instance:GetBoundingBox()
+	elseif instance:IsA("BasePart") then
+		return instance.CFrame, instance.Size
+	end
+	return CFrame.new(), Vector3.zero
+end
+
+local function placeProp(key, name, position, yawDegrees, scale)
+	local source = getSource(key)
+	if not source then
+		return nil
+	end
+
+	local clone = source:Clone()
+	clone.Name = name
+	clone.Parent = placed
+	prepareVisual(clone)
+
+	if clone:IsA("Model") and scale then
+		pcall(function()
+			clone:ScaleTo(scale)
+		end)
+	end
+
+	local yaw = math.rad(yawDegrees or 0)
+	if clone:IsA("Model") then
+		clone:PivotTo(CFrame.new(position) * CFrame.Angles(0, yaw, 0))
+		local cf, size = modelBounds(clone)
+		local bottomY = cf.Position.Y - size.Y * 0.5
+		clone:PivotTo(clone:GetPivot() + Vector3.new(0, position.Y - bottomY, 0))
+	elseif clone:IsA("BasePart") then
+		if scale then
+			clone.Size *= scale
+		end
+		clone.CFrame = CFrame.new(position + Vector3.new(0, clone.Size.Y * 0.5, 0)) * CFrame.Angles(0, yaw, 0)
+	end
+
+	return clone
+end
+
+-- Lobby: perimeter dressing only. Keep spawn sightlines and portal pads clean.
+placeProp("GiftBox", "Lobby_DailyGift_Present_A", Vector3.new(-63.5, 2.72, -165.2), 18, 0.24)
+placeProp("GiftBox", "Lobby_DailyGift_Present_B", Vector3.new(-52.5, 2.72, -165.2), -18, 0.21)
+placeProp("FactoryCrate", "Lobby_Practice_Crate", Vector3.new(70, 0.55, -181), -22, 0.46)
+placeProp("ComputerMonitor", "Lobby_ComputerPreview_Monitor", Vector3.new(48, 0.55, -181), 160, 0.72)
+placeProp("SafetyBuoy", "Lobby_WipeoutPreview_Buoy", Vector3.new(-46, 0.55, -181), -145, 0.78)
+
+-- Wipeout lane: water-safety dressing at the sides, clear of the playable bridge.
+placeProp("SafetyBuoy", "Wipeout_Buoy_Start_Left", Vector3.new(-27.5, 0.55, 18), 90, 1.0)
+placeProp("SafetyBuoy", "Wipeout_Buoy_Start_Right", Vector3.new(27.5, 0.55, 78), -90, 1.0)
+placeProp("SafetyBuoy", "Wipeout_Buoy_Launch_Left", Vector3.new(-27.5, 0.55, 246), 90, 1.0)
+placeProp("SafetyBuoy", "Wipeout_Buoy_Final_Right", Vector3.new(27.5, 0.55, 332), -90, 1.0)
+
+-- Factory: crates staged behind side walls and at the hub-facing edge.
+for index, z in ipairs({18, 58, 154, 214, 374, 444}) do
+	local side = if index % 2 == 0 then -1 else 1
+	placeProp("FactoryCrate", "Factory_SetCrate_" .. index, Vector3.new(-112 + side * 38, 0.55, z), side * 18, 0.72)
+end
+
+-- CPU: monitors only. Server rack props had bright blue faces that read like broken shimmer in the course.
+placeProp("ComputerMonitor", "CPU_Monitor_Start", Vector3.new(94, 0.55, -34), 20, 1.1)
+placeProp("ComputerMonitor", "CPU_Monitor_Finish", Vector3.new(130, 0.55, 490), -20, 1.1)
+
+print("[MarketplaceProps] Populated lobby and three levels with free non-colliding Creator Store props.")
+
+
 print("Wipeout Run installed. Press Play to test the 7-zone course with wider lanes, launch lagoon, and swinging red ball finale.")
+

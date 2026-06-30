@@ -302,6 +302,10 @@ local function softReset(player, character, color)
 
 	resetCooldownByPlayer[player] = now
 	if character then
+		local root = character:FindFirstChild("HumanoidRootPart")
+		if root then
+			FeedbackService.splashAt(root.Position + Vector3.new(0, -2, 0))
+		end
 		restoreMovement(player, character)
 		FeedbackService.characterPulse(character, color or Color3.fromRGB(255, 85, 85))
 		moveCharacterToCurrentCheckpoint(player, character)

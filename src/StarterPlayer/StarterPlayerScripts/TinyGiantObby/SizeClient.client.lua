@@ -165,51 +165,110 @@ local function currentZ()
 	return root and root.Position.Z or -math.huge
 end
 
-local objectives = {
-	{
-		text = "Obstacle 1: cross the floating step pads over the water.",
-		done = function() return currentZ() > 84 end,
-		doneText = "STEP PADS CLEARED!"
+local objectiveSets = {
+	WipeoutRun = {
+		title = "WIPEOUT RUN",
+		bestAttribute = "BestRunTimeSeconds",
+		objectives = {
+			{
+				text = "Obstacle 1: cross the floating step pads over the water.",
+				done = function() return currentZ() > 84 end,
+				doneText = "STEP PADS CLEARED!"
+			},
+			{
+				text = "Obstacle 2: time your jump over the spinning yellow arm.",
+				done = function() return currentZ() > 150 end,
+				doneText = "SPINNER CLEARED!"
+			},
+			{
+				text = "Obstacle 3: dodge the moving punch blocks.",
+				done = function() return currentZ() > 232 end,
+				doneText = "PUNCH BLOCKS CLEARED!"
+			},
+			{
+				text = "Obstacle 4: stay on the narrow bridge over the water.",
+				done = function() return currentZ() > 326 end,
+				doneText = "FINAL BRIDGE CLEARED!"
+			},
+			{
+				text = "Obstacle 5: keep your balance across the tilting tables.",
+				done = function() return currentZ() > 468 end,
+				doneText = "TILTING TABLES CLEARED!"
+			},
+			{
+				text = "Obstacle 6: time the launch pads across the lagoon.",
+				done = function() return currentZ() > 650 end,
+				doneText = "LAUNCH LAGOON CLEARED!"
+			},
+			{
+				text = "Obstacle 7: dodge the swinging red balls.",
+				done = function() return currentZ() > 735 end,
+				doneText = "SWING BALLS CLEARED!"
+			},
+			{
+				text = "Finish: run through the yellow finish gate.",
+				done = function() return player:GetAttribute("CourseFinished") == true end,
+				doneText = "WIPEOUT RUN CLEARED!"
+			},
+		},
 	},
-	{
-		text = "Obstacle 2: time your jump over the spinning yellow arm.",
-		done = function() return currentZ() > 150 end,
-		doneText = "SPINNER CLEARED!"
+	FactoryChaos = {
+		title = "FACTORY CHAOS",
+		bestAttribute = "BestFactoryTimeSeconds",
+		objectives = {
+			{
+				text = "Step onto the green start pad, then ride the conveyor lanes.",
+				done = function() return currentZ() > 70 end,
+				doneText = "CONVEYORS CLEARED!"
+			},
+			{
+				text = "Watch the warning stripes and slip past the stamp presses.",
+				done = function() return currentZ() > 178 end,
+				doneText = "STAMP PRESSES CLEARED!"
+			},
+			{
+				text = "Cross the gear tables while the yellow arms sweep the lanes.",
+				done = function() return currentZ() > 286 end,
+				doneText = "GEAR FLOOR CLEARED!"
+			},
+			{
+				text = "Dodge the swinging toy crates and run through the finish gate.",
+				done = function() return player:GetAttribute("CourseFinished") == true end,
+				doneText = "FACTORY CHAOS CLEARED!"
+			},
+		},
 	},
-	{
-		text = "Obstacle 3: dodge the moving punch blocks.",
-		done = function() return currentZ() > 232 end,
-		doneText = "PUNCH BLOCKS CLEARED!"
-	},
-	{
-		text = "Obstacle 4: stay on the narrow bridge over the water.",
-		done = function() return currentZ() > 326 end,
-		doneText = "FINAL BRIDGE CLEARED!"
-	},
-	{
-		text = "Obstacle 5: keep your balance across the tilting tables.",
-		done = function() return currentZ() > 468 end,
-		doneText = "TILTING TABLES CLEARED!"
-	},
-	{
-		text = "Obstacle 6: time the launch pads across the lagoon.",
-		done = function() return currentZ() > 650 end,
-		doneText = "LAUNCH LAGOON CLEARED!"
-	},
-	{
-		text = "Obstacle 7: dodge the swinging red balls.",
-		done = function() return currentZ() > 735 end,
-		doneText = "SWING BALLS CLEARED!"
-	},
-	{
-		text = "Finish: run through the yellow finish gate.",
-		done = function() return player:GetAttribute("CourseFinished") == true end,
-		doneText = "WIPEOUT RUN CLEARED!"
+	ComputerObby = {
+		title = "ESCAPE CPU",
+		bestAttribute = "BestComputerTimeSeconds",
+		objectives = {
+			{
+				text = "Obstacle 1: ride the glowing data buses and dodge packet blocks.",
+				done = function() return currentZ() > 108 end,
+				doneText = "DATA BUS CLEARED!"
+			},
+			{
+				text = "Obstacle 2: slip through the moving red firewall shutters.",
+				done = function() return currentZ() > 232 end,
+				doneText = "FIREWALL CLEARED!"
+			},
+			{
+				text = "Obstacle 3: time your run through the cooling fan blades.",
+				done = function() return currentZ() > 348 end,
+				doneText = "COOLING FANS CLEARED!"
+			},
+			{
+				text = "Obstacle 4: cross the cache pads and dodge corrupt swinging blocks.",
+				done = function() return player:GetAttribute("CourseFinished") == true end,
+				doneText = "CPU ESCAPED!"
+			},
+		},
 	},
 }
 
 local currentObjective = 1
 local completed = {}
+local activeCourseName = nil
 local lastSteerSent = 0
 local lastSteerValue = 0
 local heldLeft = 0
@@ -222,6 +281,25 @@ local runTimerSeenValue = nil
 local runTimerLocalStart = nil
 
 local function updateMission()
+	local courseName = player:GetAttribute("CourseName")
+	if courseName == nil or courseName == "" or player:GetAttribute("InLobby") == true then
+		if activeCourseName ~= "Hub" then
+			activeCourseName = "Hub"
+			currentObjective = 1
+			completed = {}
+		end
+		missionTitle.Text = "WIPEOUT HUB"
+		missionText.Text = "Step on yellow for Wipeout, orange for Factory, or blue for Escape CPU."
+		return
+	end
+	if courseName ~= activeCourseName then
+		activeCourseName = courseName
+		currentObjective = 1
+		completed = {}
+	end
+	local objectiveSet = objectiveSets[courseName] or objectiveSets.WipeoutRun
+	local objectives = objectiveSet.objectives
+
 	while objectives[currentObjective] and objectives[currentObjective].done() do
 		if not completed[currentObjective] then
 			completed[currentObjective] = true
@@ -234,7 +312,7 @@ local function updateMission()
 	local startTime = player:GetAttribute("RunStartTime")
 	local elapsedSeconds = player:GetAttribute("RunElapsedSeconds")
 	local finishedTime = player:GetAttribute("RunTimeSeconds")
-	local bestTime = player:GetAttribute("BestRunTimeSeconds")
+	local bestTime = player:GetAttribute(objectiveSet.bestAttribute)
 	if startTime ~= runTimerSeenValue then
 		runTimerSeenValue = startTime
 		runTimerLocalStart = if typeof(startTime) == "number" then os.clock() else nil
@@ -244,7 +322,7 @@ local function updateMission()
 	if typeof(bestTime) == "number" then
 		timing ..= string.format(" | Best %.1fs", bestTime)
 	end
-	missionTitle.Text = "WIPEOUT RUN" .. timing
+	missionTitle.Text = objectiveSet.title .. timing
 	missionText.Text = objective and objective.text or "Run it again: beat your time and grab more coins."
 end
 
@@ -265,6 +343,7 @@ player:GetAttributeChangedSignal("CurrentForm"):Connect(function()
 	setActive(player:GetAttribute("CurrentForm") or SizeConfig.DefaultForm)
 end)
 player:GetAttributeChangedSignal("CourseFinished"):Connect(updateMission)
+player:GetAttributeChangedSignal("CourseName"):Connect(updateMission)
 
 workspace.ChildAdded:Connect(function(child)
 	if child.Name == "TinyGiantGraybox" then

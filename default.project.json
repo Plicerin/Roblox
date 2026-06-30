@@ -28,8 +28,14 @@
       "WipeoutLobbyController": {
         "$path": "src/ServerScriptService/WipeoutLobbyController.server.lua"
       },
+      "WipeoutLobbyFeatures": {
+        "$path": "src/ServerScriptService/WipeoutLobbyFeatures.server.lua"
+      },
       "WipeoutCoinAnimator": {
         "$path": "src/ServerScriptService/WipeoutCoinAnimator.server.lua"
+      },
+      "WipeoutQARunner": {
+        "$path": "src/ServerScriptService/WipeoutQARunner.server.lua"
       }
     },
     "StarterPlayer": {

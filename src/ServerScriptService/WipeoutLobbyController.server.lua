@@ -2,6 +2,8 @@ local CollectionService = game:GetService("CollectionService")
 local Players = game:GetService("Players")
 
 local START_TAG = "TG_StartPortal"
+local FACTORY_TAG = "TG_FactoryPortal"
+local COMPUTER_TAG = "TG_ComputerPortal"
 local LOBBY_TAG = "TG_LobbyReturn"
 local touchCooldown = {}
 
@@ -33,6 +35,18 @@ local function canUse(player)
 	return true
 end
 
+local function startCourseFromPortal(player, courseName, checkpointName)
+	player:SetAttribute("InLobby", false)
+	player:SetAttribute("CourseName", courseName)
+	player:SetAttribute("CurrentCheckpoint", "")
+	player:SetAttribute("CourseFinished", false)
+	player:SetAttribute("RunStartTime", nil)
+	player:SetAttribute("RunElapsedSeconds", nil)
+	player:SetAttribute("RunTimeSeconds", nil)
+	local start = workspace:FindFirstChild(checkpointName, true)
+	teleportCharacter(player, start)
+end
+
 local function connectStartPortal(part)
 	part.CanCollide = false
 	part.Touched:Connect(function(hit)
@@ -41,14 +55,31 @@ local function connectStartPortal(part)
 			return
 		end
 
-		player:SetAttribute("InLobby", false)
-		player:SetAttribute("CurrentCheckpoint", "")
-		player:SetAttribute("CourseFinished", false)
-		player:SetAttribute("RunStartTime", nil)
-		player:SetAttribute("RunElapsedSeconds", nil)
-		player:SetAttribute("RunTimeSeconds", nil)
-		local start = workspace:FindFirstChild("Checkpoint_1", true) or workspace:FindFirstChild("WipeoutStart", true)
-		teleportCharacter(player, start)
+		startCourseFromPortal(player, "WipeoutRun", "Checkpoint_1")
+	end)
+end
+
+local function connectFactoryPortal(part)
+	part.CanCollide = false
+	part.Touched:Connect(function(hit)
+		local player = getPlayerFromHit(hit)
+		if not player or not canUse(player) then
+			return
+		end
+
+		startCourseFromPortal(player, "FactoryChaos", "FactoryCheckpoint_1")
+	end)
+end
+
+local function connectComputerPortal(part)
+	part.CanCollide = false
+	part.Touched:Connect(function(hit)
+		local player = getPlayerFromHit(hit)
+		if not player or not canUse(player) then
+			return
+		end
+
+		startCourseFromPortal(player, "ComputerObby", "ComputerCheckpoint_1")
 	end)
 end
 
@@ -61,6 +92,7 @@ local function connectLobbyReturn(part)
 		end
 
 		player:SetAttribute("InLobby", true)
+		player:SetAttribute("CourseName", "")
 		player:SetAttribute("CurrentCheckpoint", "")
 		player:SetAttribute("CourseFinished", false)
 		player:SetAttribute("RunStartTime", nil)
@@ -85,6 +117,8 @@ local function connectTagged(tagName, connect)
 end
 
 connectTagged(START_TAG, connectStartPortal)
+connectTagged(FACTORY_TAG, connectFactoryPortal)
+connectTagged(COMPUTER_TAG, connectComputerPortal)
 connectTagged(LOBBY_TAG, connectLobbyReturn)
 
 Players.PlayerRemoving:Connect(function(player)

@@ -16,7 +16,11 @@ local checkpointParts = {}
 local finishParts = {}
 local scanAccumulator = 0
 local COURSE_FORWARD = Vector3.new(0, 0, 1)
-local TIMER_START_PART_NAME = "StepPad_1"
+local TIMER_START_PART_NAMES = {
+	"StepPad_1",
+	"FactoryStartPad",
+	"ComputerStartPad",
+}
 
 local function getPlayerFromHit(hit)
 	local character = hit and hit:FindFirstAncestorOfClass("Model")
@@ -53,6 +57,25 @@ local function beginRun(player)
 	player:SetAttribute("RunStartTime", nil)
 	player:SetAttribute("RunElapsedSeconds", nil)
 	player:SetAttribute("RunTimeSeconds", nil)
+end
+
+local function getCourseNameForPart(part)
+	return part:GetAttribute("CourseName") or "WipeoutRun"
+end
+
+local function getBestTimeAttribute(courseName)
+	if courseName == "FactoryChaos" then
+		return "BestFactoryTimeSeconds"
+	elseif courseName == "ComputerObby" then
+		return "BestComputerTimeSeconds"
+	end
+	return "BestRunTimeSeconds"
+end
+
+local function courseMatchesPlayer(player, part)
+	local courseName = getCourseNameForPart(part)
+	local playerCourse = player:GetAttribute("CourseName")
+	return playerCourse == nil or playerCourse == "" or playerCourse == courseName
 end
 
 local function startRunTimer(player)
@@ -96,13 +119,14 @@ end
 
 local function processCheckpoint(player, part)
 	local state = getRunState(player)
-	if part.Name == "Checkpoint_1" and (state.completed or player:GetAttribute("InLobby") == true or player:GetAttribute("CurrentCheckpoint") == "") then
+	if part:GetAttribute("CourseStart") == true or (part.Name == "Checkpoint_1" and (state.completed or player:GetAttribute("InLobby") == true or player:GetAttribute("CurrentCheckpoint") == "")) then
 		beginRun(player)
 		state = runStateByPlayer[player]
 	end
 
 	checkpointByPlayer[player] = part
 	player:SetAttribute("CurrentCheckpoint", part.Name)
+	player:SetAttribute("CourseName", getCourseNameForPart(part))
 	player:SetAttribute("InLobby", false)
 
 	local key = part:GetFullName()
@@ -114,7 +138,7 @@ local function processCheckpoint(player, part)
 	end
 end
 
-local function processFinish(player)
+local function processFinish(player, part)
 	local state = getRunState(player)
 	if state.completed then
 		return
@@ -128,13 +152,20 @@ local function processFinish(player)
 	player:SetAttribute("CourseFinished", true)
 	player:SetAttribute("RunElapsedSeconds", elapsed)
 	player:SetAttribute("RunTimeSeconds", elapsed)
-	local best = player:GetAttribute("BestRunTimeSeconds")
+	local courseName = part and getCourseNameForPart(part) or player:GetAttribute("CourseName")
+	player:SetAttribute("CourseName", courseName or "WipeoutRun")
+	local bestAttribute = getBestTimeAttribute(courseName)
+	local best = player:GetAttribute(bestAttribute)
 	if typeof(best) ~= "number" or best <= 0 or elapsed < best then
-		player:SetAttribute("BestRunTimeSeconds", elapsed)
+		player:SetAttribute(bestAttribute, elapsed)
 	end
 	CurrencyService.addWins(player, ObstacleConfig.FinishWins)
 	CurrencyService.addCoins(player, ObstacleConfig.FinishCoins)
-	FeedbackService.pulsePart(workspace:FindFirstChild("FinishGate", true), Color3.fromRGB(255, 215, 0))
+	local finishGate = part or workspace:FindFirstChild("FinishGate", true)
+	FeedbackService.pulsePart(finishGate, Color3.fromRGB(255, 215, 0))
+	if finishGate then
+		FeedbackService.confettiAt(finishGate.Position + Vector3.new(0, 4, 0))
+	end
 	if player.Character then
 		FeedbackService.characterPulse(player.Character, Color3.fromRGB(255, 215, 0))
 	end
@@ -162,8 +193,18 @@ local function connectFinish(part)
 			return
 		end
 
-		processFinish(player)
+		if courseMatchesPlayer(player, part) then
+			processFinish(player, part)
+		end
 	end)
+end
+
+local function isTimerStartForPlayer(player, character, part)
+	return part
+		and part:IsA("BasePart")
+		and (part:GetAttribute("StartsRun") == true or part.Name == "StepPad_1")
+		and courseMatchesPlayer(player, part)
+		and isCharacterNearPart(character, part)
 end
 
 function CheckpointService.start()
@@ -196,13 +237,15 @@ function CheckpointService.start()
 						processCheckpoint(player, part)
 					end
 				end
-				local timerStartPart = workspace:FindFirstChild(TIMER_START_PART_NAME, true)
-				if timerStartPart and isCharacterNearPart(character, timerStartPart) then
-					startRunTimer(player)
+				for _, timerStartPartName in ipairs(TIMER_START_PART_NAMES) do
+					local timerStartPart = workspace:FindFirstChild(timerStartPartName, true)
+					if isTimerStartForPlayer(player, character, timerStartPart) then
+						startRunTimer(player)
+					end
 				end
 				for part in pairs(finishParts) do
-					if isCharacterNearPart(character, part) then
-						processFinish(player)
+					if courseMatchesPlayer(player, part) and isCharacterNearPart(character, part) then
+						processFinish(player, part)
 					end
 				end
 			end
